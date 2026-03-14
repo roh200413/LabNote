@@ -19,19 +19,29 @@ docker compose up --build backend postgres
 
 ## Implemented APIs
 - `GET /health`
-- `POST /projects`
-- `GET /projects`
-- `GET /projects/{project_id}`
-- `PUT /projects/{project_id}`
-- `DELETE /projects/{project_id}`
-- `POST /projects/{project_id}/members`
-- `GET /projects/{project_id}/members`
-- `DELETE /projects/{project_id}/members/{company_member_id}`
-- `POST /research-notes`
-- `GET /research-notes`
-- `GET /research-notes/{note_id}`
-- `PUT /research-notes/{note_id}`
-- `DELETE /research-notes/{note_id}`
+- Project
+  - `POST /projects`
+  - `GET /projects`
+  - `GET /projects/{project_id}`
+  - `PUT /projects/{project_id}`
+  - `DELETE /projects/{project_id}`
+  - `POST /projects/{project_id}/members`
+  - `GET /projects/{project_id}/members`
+  - `DELETE /projects/{project_id}/members/{company_member_id}`
+- Research Note
+  - `POST /research-notes`
+  - `GET /research-notes`
+  - `GET /research-notes/{note_id}`
+  - `PUT /research-notes/{note_id}`
+  - `DELETE /research-notes/{note_id}`
+- File Upload & PDF Split
+  - `POST /research-note-files/upload` (pdf/image)
+  - `GET /research-note-files/notes/{note_id}`
+  - `GET /research-note-files/{file_id}/pages`
+
+## Storage
+- 원본 파일: `{STORAGE_ROOT}/notes/{note_id}/raw/*`
+- 페이지 파일: `{STORAGE_ROOT}/notes/{note_id}/pages/*`
 
 ## Structure
 - `app/domain`: 도메인 모델

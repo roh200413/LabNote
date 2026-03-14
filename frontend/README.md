@@ -22,6 +22,8 @@ docker compose up --build frontend backend
 - 연구노트 목록 화면
 - 연구노트 상세 화면
 - 연구노트 본문 입력/저장
+- 연구노트 파일 업로드(PDF/이미지)
+- 업로드 파일 목록 및 페이지 메타데이터 확인
 
 ## Structure
 - `src/api`: API 호출 함수

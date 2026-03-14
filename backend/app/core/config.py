@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -18,6 +19,7 @@ class Settings(BaseSettings):
     postgres_port: int = 5432
 
     database_url: str | None = None
+    storage_root: str = "./storage"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -31,6 +33,11 @@ class Settings(BaseSettings):
             f"{self.postgres_user}:{self.postgres_password}@"
             f"{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def storage_root_path(self) -> Path:
+        return Path(self.storage_root).resolve()
 
 
 @lru_cache

@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 
+import { listNoteFiles, listNotePages, uploadNoteFile, type NoteFile, type NotePage } from "../api/file";
 import {
   assignProjectMember,
   createProject,
@@ -24,6 +25,10 @@ export function HomePage() {
   const [notes, setNotes] = useState<ResearchNote[]>([]);
   const [selectedNote, setSelectedNote] = useState<ResearchNote | null>(null);
 
+  const [noteFiles, setNoteFiles] = useState<NoteFile[]>([]);
+  const [selectedFile, setSelectedFile] = useState<NoteFile | null>(null);
+  const [notePages, setNotePages] = useState<NotePage[]>([]);
+
   const [error, setError] = useState<string | null>(null);
 
   const [companyId, setCompanyId] = useState(1);
@@ -38,6 +43,9 @@ export function HomePage() {
   const [noteContent, setNoteContent] = useState("");
   const [noteOwnerMemberId, setNoteOwnerMemberId] = useState(1);
 
+  const [uploadedBy, setUploadedBy] = useState(1);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+
   const refreshProjects = async () => {
     try {
       const data = await listProjects();
@@ -51,6 +59,15 @@ export function HomePage() {
     try {
       const data = await listResearchNotes(projectId);
       setNotes(data);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const refreshNoteFiles = async (noteId: string) => {
+    try {
+      const files = await listNoteFiles(noteId);
+      setNoteFiles(files);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -83,6 +100,9 @@ export function HomePage() {
   const onSelectProject = async (project: Project) => {
     setSelectedProject(project);
     setSelectedNote(null);
+    setSelectedFile(null);
+    setNotePages([]);
+    setNoteFiles([]);
     try {
       const [memberData] = await Promise.all([getProjectMembers(project.id), refreshNotes(project.id)]);
       setMembers(memberData);
@@ -131,6 +151,9 @@ export function HomePage() {
       setNoteTitle(detail.title);
       setNoteContent(detail.content ?? "");
       setNoteOwnerMemberId(detail.owner_member_id);
+      await refreshNoteFiles(noteId);
+      setSelectedFile(null);
+      setNotePages([]);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -148,6 +171,29 @@ export function HomePage() {
       });
       setSelectedNote(updated);
       await refreshNotes(selectedProject.id);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const onUploadFile = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!selectedNote || !uploadFile) return;
+
+    try {
+      await uploadNoteFile(selectedNote.id, uploadedBy, uploadFile);
+      setUploadFile(null);
+      await refreshNoteFiles(selectedNote.id);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const onSelectFile = async (file: NoteFile) => {
+    setSelectedFile(file);
+    try {
+      const pages = await listNotePages(file.id);
+      setNotePages(pages);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -240,6 +286,55 @@ export function HomePage() {
                   </label>
                   <button type="submit">{selectedNote ? "저장" : "생성"}</button>
                 </form>
+
+                {selectedNote && (
+                  <>
+                    <h3>파일 업로드</h3>
+                    <form onSubmit={onUploadFile} className="form-stack">
+                      <label>
+                        업로더 멤버 ID
+                        <input
+                          type="number"
+                          value={uploadedBy}
+                          onChange={(e) => setUploadedBy(Number(e.target.value))}
+                        />
+                      </label>
+                      <input
+                        type="file"
+                        accept="application/pdf,image/*"
+                        onChange={(e) => setUploadFile(e.target.files?.[0] ?? null)}
+                      />
+                      <button type="submit" disabled={!uploadFile}>
+                        업로드
+                      </button>
+                    </form>
+
+                    <h4>업로드 파일 목록</h4>
+                    <ul className="list">
+                      {noteFiles.map((file) => (
+                        <li key={file.id}>
+                          <button className="list-item" onClick={() => void onSelectFile(file)}>
+                            <strong>{file.original_name}</strong>
+                            <span>{file.file_type}</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+
+                    {selectedFile && (
+                      <>
+                        <h4>페이지 목록 - {selectedFile.original_name}</h4>
+                        <ul className="list">
+                          {notePages.map((page) => (
+                            <li key={page.id}>
+                              #{page.page_no} · {page.page_type} · {page.image_storage_key}
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
+                  </>
+                )}
               </div>
             </div>
 
