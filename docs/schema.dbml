@@ -1,0 +1,149 @@
+Table "useraccount" {
+  "id" BIGSERIAL [pk, increment]
+  "created_at" TIMESTAMP [not null]
+  "updated_at" TIMESTAMP [not null]
+  "username" VARCHAR(80) [unique, not null]
+  "display_name" VARCHAR(120) [not null]
+  "email" VARCHAR(254) [unique, not null]
+  "password" VARCHAR(255) [not null]
+  "global_role" VARCHAR(20) [not null]
+  "is_active" BOOLEAN [not null, default: true]
+  "is_approved" BOOLEAN [not null, default: false]
+}
+
+Table "company" {
+  "id" BIGSERIAL [pk, increment]
+  "created_at" TIMESTAMP [not null]
+  "updated_at" TIMESTAMP [not null]
+  "name" VARCHAR(120) [unique, not null]
+  "join_code" VARCHAR(6) [unique, not null]
+  "is_active" BOOLEAN [not null, default: true]
+}
+
+Table "company_member" {
+  "id" BIGSERIAL [pk, increment]
+  "created_at" TIMESTAMP [not null]
+  "updated_at" TIMESTAMP [not null]
+  "company_id" BIGINT [not null]
+  "user_id" BIGINT [not null]
+  "role" VARCHAR(20) [not null]
+
+  Indexes {
+    (company_id, user_id) [unique, name: "uq_company_member"]
+  }
+}
+
+Table "project" {
+  "id" UUID [pk]
+  "created_at" TIMESTAMP [not null]
+  "updated_at" TIMESTAMP [not null]
+  "company_id" BIGINT [not null]
+  "name" VARCHAR(255) [not null]
+  "code" VARCHAR(100) [not null]
+  "description" TEXT
+  "status" VARCHAR(20) [not null, default: 'active']
+  "owner_member_id" BIGINT
+  "start_date" DATE
+  "end_date" DATE
+
+  Indexes {
+    (company_id, code) [unique, name: "uq_project_company_code"]
+  }
+}
+
+Table "project_member" {
+  "id" BIGSERIAL [pk, increment]
+  "created_at" TIMESTAMP [not null]
+  "updated_at" TIMESTAMP [not null]
+  "project_id" UUID [not null]
+  "company_member_id" BIGINT [not null]
+  "role" VARCHAR(30) [not null]
+
+  Indexes {
+    (project_id, company_member_id) [unique, name: "uq_project_member"]
+  }
+}
+
+Table "project_note_cover" {
+  "id" BIGSERIAL [pk, increment]
+  "created_at" TIMESTAMP [not null]
+  "updated_at" TIMESTAMP [not null]
+  "project_id" UUID [unique, not null]
+  "cover_image_data_url" TEXT
+  "show_business_name" BOOLEAN [not null, default: true]
+  "show_title" BOOLEAN [not null, default: true]
+  "show_code" BOOLEAN [not null, default: true]
+  "show_org" BOOLEAN [not null, default: true]
+  "show_manager" BOOLEAN [not null, default: true]
+  "show_period" BOOLEAN [not null, default: true]
+}
+
+Table "research_note" {
+  "id" UUID [pk]
+  "created_at" TIMESTAMP [not null]
+  "updated_at" TIMESTAMP [not null]
+  "project_id" UUID [not null]
+  "title" VARCHAR(255) [not null]
+  "content" TEXT
+  "status" VARCHAR(20) [not null, default: 'draft']
+  "owner_member_id" BIGINT [not null]
+  "last_updated_by" BIGINT
+  "is_deleted" BOOLEAN [not null, default: false]
+}
+
+Table "research_note_file" {
+  "id" BIGSERIAL [pk, increment]
+  "created_at" TIMESTAMP [not null]
+  "updated_at" TIMESTAMP [not null]
+  "note_id" UUID [not null]
+  "uploaded_by" BIGINT [not null]
+  "file_type" VARCHAR(20) [not null]
+  "original_name" VARCHAR(255) [not null]
+  "storage_key" VARCHAR(500) [not null]
+  "mime_type" VARCHAR(100) [not null]
+  "file_size" BIGINT [not null]
+  "is_deleted" BOOLEAN [not null, default: false]
+}
+
+Table "research_note_page" {
+  "id" BIGSERIAL [pk, increment]
+  "created_at" TIMESTAMP [not null]
+  "updated_at" TIMESTAMP [not null]
+  "file_id" BIGINT [not null]
+  "page_no" INTEGER [not null]
+  "page_type" VARCHAR(20) [not null]
+  "image_storage_key" VARCHAR(500) [not null]
+  "sort_order" INTEGER [not null]
+  "is_deleted" BOOLEAN [not null, default: false]
+
+  Indexes {
+    (file_id, page_no) [unique, name: "uq_note_file_page"]
+  }
+}
+
+Table "audit_log" {
+  "id" BIGSERIAL [pk, increment]
+  "created_at" TIMESTAMP [not null]
+  "actor_user_id" BIGINT
+  "company_id" BIGINT
+  "target_type" VARCHAR(50) [not null]
+  "target_id" VARCHAR(100) [not null]
+  "action" VARCHAR(50) [not null]
+  "detail" TEXT
+}
+
+Ref:"company"."id" < "company_member"."company_id"
+Ref:"useraccount"."id" < "company_member"."user_id"
+Ref:"company"."id" < "project"."company_id"
+Ref:"company_member"."id" < "project"."owner_member_id"
+Ref:"project"."id" < "project_member"."project_id"
+Ref:"company_member"."id" < "project_member"."company_member_id"
+Ref:"project"."id" < "project_note_cover"."project_id"
+Ref:"project"."id" < "research_note"."project_id"
+Ref:"company_member"."id" < "research_note"."owner_member_id"
+Ref:"useraccount"."id" < "research_note"."last_updated_by"
+Ref:"research_note"."id" < "research_note_file"."note_id"
+Ref:"useraccount"."id" < "research_note_file"."uploaded_by"
+Ref:"research_note_file"."id" < "research_note_page"."file_id"
+Ref:"useraccount"."id" < "audit_log"."actor_user_id"
+Ref:"company"."id" < "audit_log"."company_id"
