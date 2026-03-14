@@ -17,6 +17,16 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 docker compose up --build backend postgres
 ```
 
+## Pre-created system admins
+- 시스템 관리자는 `app/core/system_admins.json`에서 별도 관리합니다.
+- 서버 시작 시 해당 파일을 로드하며, 최소 1명 이상의 시스템 관리자가 있어야 합니다.
+- 관리 스크립트:
+```bash
+cd backend
+python scripts/manage_system_admins.py list
+python scripts/manage_system_admins.py add --username admin2 --display-name "Admin Two" --email admin2@labnote.local
+```
+
 ## Implemented APIs
 - `GET /health`
 - Project

@@ -1,0 +1,10 @@
+{
+  "system_admins": [
+    {
+      "username": "sysadmin",
+      "display_name": "System Administrator",
+      "email": "sysadmin@labnote.local",
+      "is_active": true
+    }
+  ]
+}

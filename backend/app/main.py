@@ -1,6 +1,9 @@
+from pathlib import Path
+
 from fastapi import FastAPI
 
 from app.core.config import Settings, get_settings
+from app.core.system_admin_registry import SystemAdminRegistry
 from app.infrastructure.db.base import Base
 from app.infrastructure.db.session import engine
 from app.presentation.routers.file import router as file_router
@@ -19,6 +22,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         Base.metadata.create_all(bind=engine)
         app_settings.storage_root_path.mkdir(parents=True, exist_ok=True)
+
+        registry = SystemAdminRegistry(Path("app/core/system_admins.json"))
+        system_admins = registry.load()
+        app.state.system_admins = system_admins
 
     app.include_router(health_router)
     app.include_router(project_router)
