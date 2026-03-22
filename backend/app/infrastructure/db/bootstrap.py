@@ -37,6 +37,13 @@ def ensure_schema_extensions(engine: Engine) -> None:
             if "reviewed_date" not in note_columns:
                 connection.exec_driver_sql("ALTER TABLE research_note ADD COLUMN reviewed_date DATE")
 
+            project_columns = {
+                row[1]
+                for row in connection.exec_driver_sql("PRAGMA table_info('project')").fetchall()
+            }
+            if "monthly_note_target" not in project_columns:
+                connection.exec_driver_sql("ALTER TABLE project ADD COLUMN monthly_note_target INTEGER")
+
             project_member_columns = connection.exec_driver_sql("PRAGMA table_info('project_member')").fetchall()
             if project_member_columns:
                 project_member_id_column = next((row for row in project_member_columns if row[1] == "id"), None)
@@ -116,3 +123,10 @@ def ensure_schema_extensions(engine: Engine) -> None:
             connection.execute(text("ALTER TABLE research_note ADD COLUMN reviewer_member_id BIGINT"))
         if not connection.execute(note_reviewed_date_sql).first():
             connection.execute(text("ALTER TABLE research_note ADD COLUMN reviewed_date DATE"))
+
+        project_monthly_target_sql = text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'project' AND column_name = 'monthly_note_target'"
+        )
+        if not connection.execute(project_monthly_target_sql).first():
+            connection.execute(text("ALTER TABLE project ADD COLUMN monthly_note_target INTEGER"))

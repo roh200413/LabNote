@@ -108,6 +108,7 @@ class ProjectORM(Base):
     )
     start_date: Mapped[date | None] = mapped_column(Date)
     end_date: Mapped[date | None] = mapped_column(Date)
+    monthly_note_target: Mapped[int | None] = mapped_column(INTEGER)
 
 
 class ProjectMemberORM(Base):

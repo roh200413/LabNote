@@ -1,4 +1,5 @@
 from pathlib import Path
+import shutil
 from uuid import uuid4
 
 from app.core.config import get_settings
@@ -19,3 +20,8 @@ class LocalStorageService:
 
     def absolute_path(self, storage_key: str) -> Path:
         return self.root / storage_key
+
+    def delete_tree(self, subdir: str) -> None:
+        target = self.root / subdir
+        if target.exists():
+            shutil.rmtree(target, ignore_errors=True)

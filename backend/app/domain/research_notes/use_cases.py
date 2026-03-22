@@ -4,7 +4,13 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.infrastructure.db.models import ProjectORM, ResearchNoteFileORM, ResearchNoteORM, ResearchNotePageORM
+from app.infrastructure.db.models import (
+    ProjectORM,
+    ResearchNoteDocumentORM,
+    ResearchNoteFileORM,
+    ResearchNoteORM,
+    ResearchNotePageORM,
+)
 from app.infrastructure.pdf.pdf_splitter import PdfSplitterService
 from app.infrastructure.storage.local_storage import LocalStorageService
 
@@ -71,8 +77,17 @@ def update_research_note(db: Session, note_id: str, **kwargs) -> ResearchNoteORM
 
 def delete_research_note(db: Session, note_id: str) -> None:
     note = get_research_note(db, note_id)
-    note.is_deleted = True
+    storage = LocalStorageService()
+    db.query(ResearchNoteDocumentORM).filter(ResearchNoteDocumentORM.note_id == note_id).delete()
+    db.query(ResearchNotePageORM).filter(
+        ResearchNotePageORM.file_id.in_(
+            select(ResearchNoteFileORM.id).where(ResearchNoteFileORM.note_id == note_id)
+        )
+    ).delete(synchronize_session=False)
+    db.query(ResearchNoteFileORM).filter(ResearchNoteFileORM.note_id == note_id).delete()
+    db.delete(note)
     db.commit()
+    storage.delete_tree(f"notes/{note_id}")
 
 
 def _detect_file_type(mime_type: str, original_name: str) -> str:

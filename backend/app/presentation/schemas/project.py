@@ -12,6 +12,7 @@ class ProjectCreateRequest(BaseModel):
     owner_member_id: int | None = None
     start_date: date | None = None
     end_date: date | None = None
+    monthly_note_target: int | None = None
 
 
 class ProjectUpdateRequest(BaseModel):
@@ -22,6 +23,7 @@ class ProjectUpdateRequest(BaseModel):
     owner_member_id: int | None = None
     start_date: date | None = None
     end_date: date | None = None
+    monthly_note_target: int | None = None
 
 
 class ProjectResponse(BaseModel):
@@ -36,6 +38,7 @@ class ProjectResponse(BaseModel):
     owner_member_id: int | None
     start_date: date | None
     end_date: date | None
+    monthly_note_target: int | None
 
 
 class ProjectNoteCoverResponse(BaseModel):
