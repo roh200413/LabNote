@@ -1,13 +1,13 @@
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
-from app.application.file_service import (
+from app.domain.research_notes.use_cases import (
+    ResearchNoteNotFoundError,
     UnsupportedFileTypeError,
     list_note_files,
     list_note_pages,
     upload_note_file,
 )
-from app.application.research_note_service import ResearchNoteNotFoundError
 from app.infrastructure.db.session import get_db
 from app.presentation.schemas.file import FileUploadResponse, ResearchNoteFileResponse, ResearchNotePageResponse
 

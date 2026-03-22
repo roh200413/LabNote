@@ -15,7 +15,7 @@ class LocalStorageService:
         target_dir.mkdir(parents=True, exist_ok=True)
         target = target_dir / safe_name
         target.write_bytes(content)
-        return str(target.relative_to(self.root))
+        return target.relative_to(self.root).as_posix()
 
     def absolute_path(self, storage_key: str) -> Path:
         return self.root / storage_key

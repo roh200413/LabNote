@@ -5,11 +5,11 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-COPY pyproject.toml /app/pyproject.toml
+COPY requirements.txt /app/requirements.txt
 COPY app /app/app
 
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir fastapi uvicorn[standard] sqlalchemy psycopg[binary] pydantic-settings
+    pip install --no-cache-dir -r /app/requirements.txt
 
 EXPOSE 8000
 

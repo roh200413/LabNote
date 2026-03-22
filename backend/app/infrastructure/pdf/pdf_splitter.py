@@ -1,7 +1,6 @@
 from io import BytesIO
 
-from PIL import Image, ImageDraw
-from pypdf import PdfReader
+import fitz
 
 
 class PdfSplitResult:
@@ -11,23 +10,17 @@ class PdfSplitResult:
 
 
 class PdfSplitterService:
-    """Minimal PDF split service.
-
-    For each page in PDF, create a placeholder PNG preview image with page number.
-    This avoids OS-level poppler dependency while preserving per-page artifacts.
-    """
+    """Render each PDF page to a PNG preview image."""
 
     def split_to_images(self, pdf_bytes: bytes) -> list[PdfSplitResult]:
-        reader = PdfReader(BytesIO(pdf_bytes))
         results: list[PdfSplitResult] = []
+        document = fitz.open(stream=pdf_bytes, filetype="pdf")
 
-        for index, _ in enumerate(reader.pages, start=1):
-            image = Image.new("RGB", (1240, 1754), color=(255, 255, 255))
-            draw = ImageDraw.Draw(image)
-            draw.text((40, 40), f"PDF Page {index}", fill=(0, 0, 0))
+        for index, page in enumerate(document, start=1):
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            image_bytes = pixmap.tobytes("png")
+            results.append(PdfSplitResult(page_no=index, image_bytes=image_bytes))
 
-            output = BytesIO()
-            image.save(output, format="PNG")
-            results.append(PdfSplitResult(page_no=index, image_bytes=output.getvalue()))
+        document.close()
 
         return results

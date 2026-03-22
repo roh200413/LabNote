@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Request
 
-from app.application.services import now_utc_iso
 from app.core.config import get_settings
+from app.domain.audit.use_cases import now_utc_iso
 
 router = APIRouter(prefix="/health", tags=["health"])
 

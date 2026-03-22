@@ -1,12 +1,20 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.application.research_note_service import ResearchNoteNotFoundError, get_research_note
-from app.infrastructure.db.models import ResearchNoteFileORM, ResearchNotePageORM
+from app.infrastructure.db.models import ProjectORM, ResearchNoteFileORM, ResearchNoteORM, ResearchNotePageORM
 from app.infrastructure.pdf.pdf_splitter import PdfSplitterService
 from app.infrastructure.storage.local_storage import LocalStorageService
+
+
+class ResearchNoteNotFoundError(Exception):
+    pass
+
+
+class ProjectNotFoundError(Exception):
+    pass
 
 
 class UnsupportedFileTypeError(Exception):
@@ -20,14 +28,62 @@ class FileUploadResult:
 
 
 IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
+PDF_MIME_TYPES = {"application/pdf", "application/x-pdf"}
 
 
-def _detect_file_type(mime_type: str) -> str:
-    if mime_type == "application/pdf":
+def _ensure_project_exists(db: Session, project_id: str) -> None:
+    project = db.get(ProjectORM, project_id)
+    if not project:
+        raise ProjectNotFoundError(project_id)
+
+
+def create_research_note(db: Session, **kwargs) -> ResearchNoteORM:
+    _ensure_project_exists(db, kwargs["project_id"])
+    note = ResearchNoteORM(**kwargs)
+    db.add(note)
+    db.commit()
+    db.refresh(note)
+    return note
+
+
+def list_research_notes(db: Session, project_id: str | None = None) -> list[ResearchNoteORM]:
+    stmt = select(ResearchNoteORM).where(ResearchNoteORM.is_deleted.is_(False))
+    if project_id is not None:
+        stmt = stmt.where(ResearchNoteORM.project_id == project_id)
+    return list(db.scalars(stmt.order_by(ResearchNoteORM.created_at.desc())).all())
+
+
+def get_research_note(db: Session, note_id: str) -> ResearchNoteORM:
+    note = db.get(ResearchNoteORM, note_id)
+    if not note or note.is_deleted:
+        raise ResearchNoteNotFoundError(note_id)
+    return note
+
+
+def update_research_note(db: Session, note_id: str, **kwargs) -> ResearchNoteORM:
+    note = get_research_note(db, note_id)
+    for key, value in kwargs.items():
+        setattr(note, key, value)
+    db.commit()
+    db.refresh(note)
+    return note
+
+
+def delete_research_note(db: Session, note_id: str) -> None:
+    note = get_research_note(db, note_id)
+    note.is_deleted = True
+    db.commit()
+
+
+def _detect_file_type(mime_type: str, original_name: str) -> str:
+    normalized_mime_type = (mime_type or "").lower()
+    extension = Path(original_name).suffix.lower()
+
+    if normalized_mime_type in PDF_MIME_TYPES or extension == ".pdf":
         return "pdf"
-    if mime_type in IMAGE_MIME_TYPES:
+    if normalized_mime_type in IMAGE_MIME_TYPES or extension in {".png", ".jpg", ".jpeg", ".webp"}:
         return "image"
-    raise UnsupportedFileTypeError(mime_type)
+    raise UnsupportedFileTypeError(mime_type or original_name)
 
 
 def upload_note_file(
@@ -41,7 +97,7 @@ def upload_note_file(
 ) -> FileUploadResult:
     get_research_note(db, note_id)
 
-    file_type = _detect_file_type(mime_type)
+    file_type = _detect_file_type(mime_type, original_name)
     storage = LocalStorageService()
 
     raw_storage_key = storage.save_bytes(file_bytes, f"notes/{note_id}/raw", original_name)

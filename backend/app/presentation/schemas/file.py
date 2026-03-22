@@ -1,9 +1,11 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class ResearchNoteFileResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     created_at: datetime
     updated_at: datetime
@@ -18,6 +20,8 @@ class ResearchNoteFileResponse(BaseModel):
 
 
 class ResearchNotePageResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     created_at: datetime
     updated_at: datetime
@@ -30,5 +34,7 @@ class ResearchNotePageResponse(BaseModel):
 
 
 class FileUploadResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     file: ResearchNoteFileResponse
     pages: list[ResearchNotePageResponse]

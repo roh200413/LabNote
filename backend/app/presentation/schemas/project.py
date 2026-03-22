@@ -38,6 +38,32 @@ class ProjectResponse(BaseModel):
     end_date: date | None
 
 
+class ProjectNoteCoverResponse(BaseModel):
+    id: int
+    project_id: str
+    cover_image_data_url: str | None
+    template_payload: str | None
+    show_business_name: bool
+    show_title: bool
+    show_code: bool
+    show_org: bool
+    show_manager: bool
+    show_period: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProjectNoteCoverUpsertRequest(BaseModel):
+    cover_image_data_url: str | None = None
+    template_payload: str | None = None
+    show_business_name: bool = True
+    show_title: bool = True
+    show_code: bool = True
+    show_org: bool = True
+    show_manager: bool = True
+    show_period: bool = True
+
+
 class ProjectMemberAssignRequest(BaseModel):
     company_member_id: int
     role: str = "member"
@@ -47,6 +73,13 @@ class ProjectMemberResponse(BaseModel):
     id: int
     project_id: str
     company_member_id: int
+    company_id: int
+    user_id: int
+    name: str
+    email: str
+    company_role: str
     role: str
+    is_active: bool
+    is_approved: bool
     created_at: datetime
     updated_at: datetime

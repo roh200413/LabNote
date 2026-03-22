@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
-from app.application.research_note_service import (
+from app.domain.research_notes.use_cases import (
     ProjectNotFoundError,
     ResearchNoteNotFoundError,
     create_research_note,
