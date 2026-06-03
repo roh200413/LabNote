@@ -1,0 +1,74 @@
+
+> labnote-frontend@0.1.0 dev
+> vite --host 0.0.0.0 --port 5176
+
+
+  [32m[1mVITE[22m v5.4.21[39m  [2mready in [0m[1m771[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5176[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://100.122.141.93:[1m5176[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://192.168.45.225:[1m5176[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://172.28.112.1:[1m5176[22m/[39m
+[2m오후 5:46:17[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/HomePage.tsx[22m
+[2m오후 5:46:27[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/HomePage.tsx[22m
+[2m오후 5:46:38[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/HomePage.tsx[22m
+[2m오후 5:46:51[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/HomePage.tsx[22m
+[2m오후 5:49:44[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/HomePage.tsx[22m
+[2m오후 5:50:22[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/HomePage.tsx[22m
+[2m오후 5:50:34[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 6:31:32[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 6:32:34[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 6:39:20[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/HomePage.tsx[22m
+[2m오후 6:39:30[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 6:41:16[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/HomePage.tsx[22m
+[2m오후 6:42:24[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 6:59:49[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 7:00:43[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 7:03:11[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/layout/MainLayout.tsx[22m
+[2m오후 7:04:25[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 7:15:44[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 7:16:00[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 7:33:12[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 7:38:52[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/AdminPage.tsx[22m
+[2m오후 7:39:08[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/AdminPage.tsx[22m
+[2m오후 7:40:11[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 7:47:35[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 7:51:17[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/layout/MainLayout.tsx[22m
+[2m오후 7:51:43[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/App.tsx[22m
+[2m오후 7:52:29[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 7:52:41[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 7:53:58[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/layout/MainLayout.tsx[22m
+[2m오후 7:54:05[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 8:34:35[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/AdminPage.tsx[22m
+[2m오후 8:35:25[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/AdminPage.tsx[22m
+[2m오후 8:35:50[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/AdminPage.tsx[22m
+[2m오후 8:36:25[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 8:38:18[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 8:41:06[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 8:46:17[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/AdminPage.tsx[22m
+[2m오후 8:46:41[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/AdminPage.tsx[22m
+[2m오후 8:46:57[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 8:47:37[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/AdminPage.tsx[22m
+[2m오후 8:51:56[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 8:55:41[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 8:57:46[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 8:58:43[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 8:59:57[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/HomePage.tsx[22m
+[2m오후 9:00:07[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 9:01:55[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/HomePage.tsx[22m
+[2m오후 9:02:11[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/HomePage.tsx[22m
+[2m오후 9:02:27[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 9:02:39[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 9:03:23[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 9:42:12[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/HomePage.tsx[22m
+[2m오후 9:43:40[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/HomePage.tsx[22m
+[2m오후 9:44:53[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 9:49:34[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/layout/MainLayout.tsx[22m
+[2m오후 9:49:46[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/App.tsx[22m
+[2m오후 9:49:58[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/HomePage.tsx[22m
+[2m오후 9:50:15[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/HomePage.tsx[22m
+[2m오후 9:50:33[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/HomePage.tsx[22m
+[2m오후 9:50:52[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/HomePage.tsx[22m
+[2m오후 9:51:06[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m오후 9:59:55[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/App.tsx[22m
+[2m오후 10:00:15[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles.css[22m

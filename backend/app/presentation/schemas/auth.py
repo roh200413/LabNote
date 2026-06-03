@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field, field_validator
+from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class SignUpRequest(BaseModel):
@@ -56,6 +58,18 @@ class UserResponse(BaseModel):
 
 class SignatureUpdateRequest(BaseModel):
     signature_data_url: str | None = None
+
+
+class UserSignatureResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    user_id: int
+    image_storage_key: str
+    checksum: str | None
+    status: str
+    created_at: datetime
+    revoked_at: datetime | None
 
 
 class AuthResponse(BaseModel):

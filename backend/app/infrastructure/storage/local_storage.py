@@ -19,7 +19,10 @@ class LocalStorageService:
         return target.relative_to(self.root).as_posix()
 
     def absolute_path(self, storage_key: str) -> Path:
-        return self.root / storage_key
+        target = (self.root / storage_key).resolve()
+        if not target.is_relative_to(self.root.resolve()):
+            raise ValueError("Storage key escapes storage root")
+        return target
 
     def delete_tree(self, subdir: str) -> None:
         target = self.root / subdir

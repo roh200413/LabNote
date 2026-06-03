@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     app_port: int = 8000
     app_secret_key: str = "change-me-in-production"
     access_token_expire_minutes: int = 60 * 24
-    system_admin_password: str = "LabnoteAdmin!123"
+    system_admin_password: str = "admin1234"
 
     db: str = "postgresql"
     db_user: str = ""
@@ -29,6 +29,10 @@ class Settings(BaseSettings):
 
     database_url: str | None = None
     storage_root: str = "./storage"
+    max_upload_bytes: int = 50 * 1024 * 1024
+    max_pdf_pages: int = 100
+    pdf_render_zoom: float = 2.0
+    thumbnail_max_width: int = 320
 
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE),

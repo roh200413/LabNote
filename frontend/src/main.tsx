@@ -1,13 +1,10 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { MainLayout } from "./layout/MainLayout";
-import { HomePage } from "./pages/HomePage";
+import App from "./App";
 import "./styles.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <MainLayout>
-      <HomePage />
-    </MainLayout>
+    <App />
   </React.StrictMode>
 );

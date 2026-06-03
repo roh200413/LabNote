@@ -1,0 +1,8 @@
+INFO:     127.0.0.1:64313 - "GET /healthz HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64323 - "POST /api/autoflow/executions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64326 - "GET /healthz HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64347 - "GET /api/autoflow/workspaces/data-bank HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64353 - "GET /healthz HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64354 - "POST /api/autoflow/executions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52318 - "GET /healthz HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52358 - "GET /healthz HTTP/1.1" 200 OK

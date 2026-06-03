@@ -1,7 +1,11 @@
+import base64
+import hashlib
 import re
 import secrets
 import string
 from collections.abc import Iterable
+from datetime import datetime, timezone
+from urllib.parse import unquote_to_bytes
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -12,7 +16,7 @@ from app.core.system_admin_registry import SystemAdmin
 from app.domain.accounts.entities import UserAccount
 from app.domain.audit.entities import AuditLogEntry
 from app.domain.companies.entities import Company, CompanyMember, CompanyMembershipRequest
-from app.infrastructure.db.models import CompanyMembershipRequestORM, CompanyORM
+from app.infrastructure.db.models import CompanyMembershipRequestORM, CompanyORM, UserSignatureORM
 from app.infrastructure.repositories.sqlalchemy_identity import (
     SqlAlchemyAuditLogRepository,
     SqlAlchemyCompanyMemberRepository,
@@ -21,6 +25,7 @@ from app.infrastructure.repositories.sqlalchemy_identity import (
     SqlAlchemyDirectoryQueries,
     SqlAlchemyUserAccountRepository,
 )
+from app.infrastructure.storage.local_storage import LocalStorageService
 
 
 class UserAlreadyExistsError(Exception):
@@ -513,5 +518,105 @@ def update_user_signature(db: Session, user_id: int, signature_data_url: str | N
         raise UserNotFoundError(user_id)
     user.signature_data_url = signature_data_url
     updated_user = users.update(user)
+    if signature_data_url:
+        create_user_signature_from_data_url(db, user_id=user_id, signature_data_url=signature_data_url)
+    else:
+        db.query(UserSignatureORM).filter(
+            UserSignatureORM.user_id == user_id,
+            UserSignatureORM.status == "active",
+        ).update({"status": "revoked", "revoked_at": datetime.now(timezone.utc)})
     db.commit()
     return updated_user
+
+
+def _decode_signature_data_url(signature_data_url: str) -> bytes:
+    if not signature_data_url.startswith("data:image/"):
+        raise ValueError("Signature must be an image data URL")
+    header, encoded = signature_data_url.split(",", 1)
+    if ";base64" in header:
+        return base64.b64decode(encoded)
+    return unquote_to_bytes(encoded)
+
+
+def create_user_signature_from_data_url(
+    db: Session,
+    *,
+    user_id: int,
+    signature_data_url: str,
+) -> UserSignatureORM:
+    image_bytes = _decode_signature_data_url(signature_data_url)
+    storage = LocalStorageService()
+    db.query(UserSignatureORM).filter(
+        UserSignatureORM.user_id == user_id,
+        UserSignatureORM.status == "active",
+    ).update({"status": "revoked", "revoked_at": datetime.now(timezone.utc)})
+    storage_key = storage.save_bytes(image_bytes, f"signatures/{user_id}", "signature.png")
+    signature = UserSignatureORM(
+        user_id=user_id,
+        image_storage_key=storage_key,
+        checksum=hashlib.sha256(image_bytes).hexdigest(),
+        status="active",
+    )
+    db.add(signature)
+    db.flush()
+    return signature
+
+
+def create_user_signature(
+    db: Session,
+    *,
+    user_id: int,
+    filename: str,
+    file_bytes: bytes,
+    mime_type: str | None = None,
+) -> UserSignatureORM:
+    users = SqlAlchemyUserAccountRepository(db)
+    user = users.get(user_id)
+    if user is None:
+        raise UserNotFoundError(user_id)
+
+    storage = LocalStorageService()
+    db.query(UserSignatureORM).filter(
+        UserSignatureORM.user_id == user_id,
+        UserSignatureORM.status == "active",
+    ).update({"status": "revoked", "revoked_at": datetime.now(timezone.utc)})
+    storage_key = storage.save_bytes(file_bytes, f"signatures/{user_id}", filename)
+    signature_mime_type = mime_type if mime_type and mime_type.startswith("image/") else "image/png"
+    user.signature_data_url = f"data:{signature_mime_type};base64,{base64.b64encode(file_bytes).decode('ascii')}"
+    users.update(user)
+    signature = UserSignatureORM(
+        user_id=user_id,
+        image_storage_key=storage_key,
+        checksum=hashlib.sha256(file_bytes).hexdigest(),
+        status="active",
+    )
+    db.add(signature)
+    db.commit()
+    db.refresh(signature)
+    return signature
+
+
+def list_user_signatures(db: Session, *, user_id: int) -> list[UserSignatureORM]:
+    return list(
+        db.scalars(
+            select(UserSignatureORM)
+            .where(UserSignatureORM.user_id == user_id)
+            .order_by(UserSignatureORM.created_at.desc(), UserSignatureORM.id.desc())
+        ).all()
+    )
+
+
+def revoke_user_signature(db: Session, *, user_id: int, signature_id: int) -> None:
+    signature = db.get(UserSignatureORM, signature_id)
+    if signature is None or signature.user_id != user_id:
+        raise ValueError("Signature not found")
+    was_active = signature.status == "active"
+    signature.status = "revoked"
+    signature.revoked_at = datetime.now(timezone.utc)
+    if was_active:
+        users = SqlAlchemyUserAccountRepository(db)
+        user = users.get(user_id)
+        if user is not None:
+            user.signature_data_url = None
+            users.update(user)
+    db.commit()

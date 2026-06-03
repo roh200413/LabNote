@@ -76,7 +76,10 @@ class ResearchNoteDocumentResponse(BaseModel):
     id: str
     note_id: str
     title: str
+    status: str = "draft"
     schema_version: int
+    current_revision_id: int | None = None
+    current_revision_no: int | None = None
     source_file_id: int | None
     source_page_id: int | None
     document: DocumentSchemaPayload
@@ -88,7 +91,9 @@ class ResearchNoteDocumentSummaryResponse(BaseModel):
     id: str
     note_id: str
     title: str
+    status: str = "draft"
     schema_version: int
+    current_revision_id: int | None = None
     source_file_id: int | None
     source_page_id: int | None
     created_at: datetime
@@ -112,3 +117,16 @@ class ResearchNotePdfExportRequest(BaseModel):
     note_id: str | None = Field(default=None, alias="noteId")
 
     model_config = {"populate_by_name": True}
+
+
+class ResearchNoteExportResponse(BaseModel):
+    id: str
+    project_id: str
+    created_by: int | None
+    status: str
+    pdf_storage_key: str | None
+    file_size: int | None
+    checksum: str | None
+    error_message: str | None
+    created_at: datetime
+    completed_at: datetime | None

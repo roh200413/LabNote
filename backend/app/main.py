@@ -13,10 +13,12 @@ from app.infrastructure.db.base import Base
 from app.infrastructure.db.bootstrap import ensure_schema_extensions
 from app.infrastructure.db.session import engine
 from app.presentation.routers.admin import router as admin_router
+from app.presentation.routers.autoflow_attachment import router as autoflow_attachment_router
 from app.presentation.routers.auth import router as auth_router
 from app.presentation.routers.directory import router as directory_router
 from app.presentation.routers.document_editor import router as document_editor_router
 from app.presentation.routers.file import router as file_router
+from app.presentation.routers.github_integration import router as github_integration_router
 from app.presentation.routers.health import router as health_router
 from app.presentation.routers.project import router as project_router
 from app.presentation.routers.research_note import router as research_note_router
@@ -31,11 +33,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_origins=[
             "http://localhost:5173",
             "http://127.0.0.1:5173",
+            "http://localhost:5174",
+            "http://127.0.0.1:5174",
+            "http://localhost:5175",
+            "http://127.0.0.1:5175",
         ],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
-        expose_headers=["Content-Disposition", "Content-Length"],
+        expose_headers=["Content-Disposition", "Content-Length", "X-LabNote-Export-Id", "X-LabNote-Export-Storage-Key"],
     )
 
     @app.on_event("startup")
@@ -53,10 +59,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             app.state.seeded_system_admins = ensure_system_admin_users(db, system_admins)
 
     app.include_router(health_router)
+    app.include_router(autoflow_attachment_router)
     app.include_router(auth_router)
     app.include_router(admin_router)
     app.include_router(directory_router)
     app.include_router(document_editor_router)
+    app.include_router(github_integration_router)
     app.include_router(project_router)
     app.include_router(research_note_router)
     app.include_router(file_router)
@@ -65,6 +73,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/")
     def root() -> dict[str, str]:
         return {"message": "LabNote API is running"}
+
+    @app.get("/healthz")
+    def healthz() -> dict[str, str]:
+        return {"status": "ok"}
 
     return app
 

@@ -1,7 +1,9 @@
 import base64
+import hashlib
 import math
 import io
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import unquote_to_bytes
 
@@ -14,9 +16,22 @@ from sqlalchemy.orm import Session
 from app.domain.research_notes.document_editor_use_cases import (
     ResearchNoteDocumentNotFoundError,
     get_note_document,
+    get_current_revision_no,
     list_note_documents,
     save_note_document,
     upload_editor_image,
+)
+from app.domain.research_notes.use_cases import (
+    ResearchNoteAccessDeniedError,
+    ResearchNoteManageDeniedError,
+    ResearchNoteNotFoundError,
+    ResearchNoteStateError,
+    get_research_note,
+)
+from app.domain.projects.use_cases import (
+    ProjectAccessDeniedError,
+    ProjectNotFoundError,
+    get_project as require_project_access,
 )
 from app.infrastructure.db.models import (
     CompanyORM,
@@ -24,6 +39,7 @@ from app.infrastructure.db.models import (
     ProjectORM,
     ProjectNoteCoverORM,
     ResearchNoteDocumentORM,
+    ResearchNoteExportORM,
     ResearchNoteFileORM,
     ResearchNoteORM,
     ResearchNotePageORM,
@@ -31,6 +47,7 @@ from app.infrastructure.db.models import (
 )
 from app.infrastructure.db.session import get_db
 from app.infrastructure.storage.local_storage import LocalStorageService
+from app.presentation.dependencies.auth import get_current_user
 from app.presentation.schemas.document_editor import (
     DocumentSchemaPayload,
     EditorImageUploadResponse,
@@ -39,6 +56,7 @@ from app.presentation.schemas.document_editor import (
     ResearchNoteDocumentResponse,
     ResearchNoteDocumentSaveRequest,
     ResearchNoteDocumentSummaryResponse,
+    ResearchNoteExportResponse,
     ResearchNotePdfExportRequest,
     TextBlockSchema,
     TextStyleSchema,
@@ -504,15 +522,21 @@ def _normalize_document_for_export(
     )
 
 
-def _get_export_document(db: Session, *, note_id: str | None = None, document_id: str | None = None) -> tuple[ResearchNoteORM, DocumentSchemaPayload]:
+def _get_export_document(
+    db: Session,
+    *,
+    current_user,
+    note_id: str | None = None,
+    document_id: str | None = None,
+) -> tuple[ResearchNoteORM, DocumentSchemaPayload]:
     if document_id:
-        stored_document = get_note_document(db, document_id)
-        note = _get_note_or_404(db, stored_document.note_id)
+        stored_document = get_note_document(db, document_id, current_user)
+        note = get_research_note(db, stored_document.note_id, current_user)
         parsed_document = DocumentSchemaPayload.model_validate_json(stored_document.document_payload)
         return note, _normalize_document_for_export(db, note, parsed_document)
 
     if note_id:
-        note = _get_note_or_404(db, note_id)
+        note = get_research_note(db, note_id, current_user)
         latest_document = _get_latest_note_document(db, note_id)
         parsed_document = (
             DocumentSchemaPayload.model_validate_json(latest_document.document_payload) if latest_document else None
@@ -968,12 +992,15 @@ def _build_document_for_page(
     )
 
 
-def _to_response(document) -> ResearchNoteDocumentResponse:
+def _to_response(document, db: Session) -> ResearchNoteDocumentResponse:
     return ResearchNoteDocumentResponse(
         id=document.id,
         note_id=document.note_id,
         title=document.title,
+        status=document.status,
         schema_version=document.schema_version,
+        current_revision_id=document.current_revision_id,
+        current_revision_no=get_current_revision_no(db, document),
         source_file_id=document.source_file_id,
         source_page_id=document.source_page_id,
         document=DocumentSchemaPayload.model_validate_json(document.document_payload),
@@ -983,17 +1010,26 @@ def _to_response(document) -> ResearchNoteDocumentResponse:
 
 
 @router.get("/notes/{note_id}", response_model=list[ResearchNoteDocumentSummaryResponse])
-def list_note_documents_endpoint(note_id: str, db: Session = Depends(get_db)):
+def list_note_documents_endpoint(
+    note_id: str,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     try:
-        documents = list_note_documents(db, note_id)
+        documents = list_note_documents(db, note_id, current_user)
     except ResearchNoteDocumentNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Research note not found") from exc
+    except (ResearchNoteNotFoundError, ResearchNoteAccessDeniedError) as exc:
+        status_code = 404 if isinstance(exc, ResearchNoteNotFoundError) else 403
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     return [
         ResearchNoteDocumentSummaryResponse(
             id=document.id,
             note_id=document.note_id,
             title=document.title,
+            status=document.status,
             schema_version=document.schema_version,
+            current_revision_id=document.current_revision_id,
             source_file_id=document.source_file_id,
             source_page_id=document.source_page_id,
             created_at=document.created_at,
@@ -1004,15 +1040,25 @@ def list_note_documents_endpoint(note_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{document_id}", response_model=ResearchNoteDocumentResponse)
-def get_note_document_endpoint(document_id: str, db: Session = Depends(get_db)):
+def get_note_document_endpoint(
+    document_id: str,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     try:
-        return _to_response(get_note_document(db, document_id))
+        return _to_response(get_note_document(db, document_id, current_user), db)
     except ResearchNoteDocumentNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Research note document not found") from exc
+    except ResearchNoteAccessDeniedError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.post("", response_model=ResearchNoteDocumentResponse, status_code=status.HTTP_201_CREATED)
-def create_note_document_endpoint(payload: ResearchNoteDocumentSaveRequest, db: Session = Depends(get_db)):
+def create_note_document_endpoint(
+    payload: ResearchNoteDocumentSaveRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     try:
         document = save_note_document(
             db,
@@ -1022,10 +1068,15 @@ def create_note_document_endpoint(payload: ResearchNoteDocumentSaveRequest, db: 
             source_file_id=payload.source_file_id,
             source_page_id=payload.source_page_id,
             document_payload=payload.document.model_dump(by_alias=True),
+            current_user=current_user,
         )
-        return _to_response(document)
+        return _to_response(document, db)
     except ResearchNoteDocumentNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Research note document not found") from exc
+    except (ResearchNoteAccessDeniedError, ResearchNoteManageDeniedError) as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ResearchNoteStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1034,6 +1085,7 @@ def create_note_document_endpoint(payload: ResearchNoteDocumentSaveRequest, db: 
 def update_note_document_endpoint(
     document_id: str,
     payload: ResearchNoteDocumentSaveRequest,
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     try:
@@ -1045,10 +1097,15 @@ def update_note_document_endpoint(
             source_file_id=payload.source_file_id,
             source_page_id=payload.source_page_id,
             document_payload=payload.document.model_dump(by_alias=True),
+            current_user=current_user,
         )
-        return _to_response(document)
+        return _to_response(document, db)
     except ResearchNoteDocumentNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Research note document not found") from exc
+    except (ResearchNoteAccessDeniedError, ResearchNoteManageDeniedError) as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ResearchNoteStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1058,39 +1115,148 @@ async def upload_editor_image_endpoint(
     request: Request,
     note_id: str = Form(...),
     upload: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     try:
         file_bytes = await upload.read()
         filename = upload.filename or "editor-image.png"
-        storage_key, stored_name = upload_editor_image(note_id=note_id, filename=filename, file_bytes=file_bytes)
+        storage_key, stored_name = upload_editor_image(
+            db=db,
+            note_id=note_id,
+            filename=filename,
+            file_bytes=file_bytes,
+            current_user=current_user,
+        )
         suffix = Path(storage_key).name if storage_key else stored_name
         return EditorImageUploadResponse(
             url=str(request.base_url).rstrip("/") + f"/storage/{storage_key}",
             storage_key=storage_key,
             filename=suffix,
         )
+    except (ResearchNoteAccessDeniedError, ResearchNoteManageDeniedError) as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ResearchNoteStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _export_response(export: ResearchNoteExportORM) -> ResearchNoteExportResponse:
+    return ResearchNoteExportResponse(
+        id=export.id,
+        project_id=export.project_id,
+        created_by=export.created_by,
+        status=export.status,
+        pdf_storage_key=export.pdf_storage_key,
+        file_size=export.file_size,
+        checksum=export.checksum,
+        error_message=export.error_message,
+        created_at=export.created_at,
+        completed_at=export.completed_at,
+    )
+
+
+@router.get("/exports/{export_id}", response_model=ResearchNoteExportResponse)
+def get_research_note_export_endpoint(
+    export_id: str,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ResearchNoteExportResponse:
+    export = db.get(ResearchNoteExportORM, export_id)
+    if export is None:
+        raise HTTPException(status_code=404, detail="Research note export not found")
+    try:
+        require_project_access(db, export.project_id, current_user)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+    except ProjectAccessDeniedError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return _export_response(export)
+
+
+@router.get("/exports/{export_id}/download")
+def download_research_note_export_endpoint(
+    export_id: str,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    export = db.get(ResearchNoteExportORM, export_id)
+    if export is None or export.status != "ready" or not export.pdf_storage_key:
+        raise HTTPException(status_code=404, detail="Research note export not found")
+    try:
+        require_project_access(db, export.project_id, current_user)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+    except ProjectAccessDeniedError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    storage = LocalStorageService()
+    pdf_path = storage.absolute_path(export.pdf_storage_key)
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail="Export PDF file not found")
+    return StreamingResponse(
+        io.BytesIO(pdf_path.read_bytes()),
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="research-notes.pdf"'},
+    )
 
 
 @router.post("/export-pdf")
 def export_note_document_pdf_endpoint(
     payload: ResearchNotePdfExportRequest,
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    note, document = _get_export_document(db, note_id=payload.note_id, document_id=payload.document_id)
+    try:
+        note, document = _get_export_document(
+            db,
+            current_user=current_user,
+            note_id=payload.note_id,
+            document_id=payload.document_id,
+        )
+    except ResearchNoteNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Research note not found") from exc
+    except ResearchNoteAccessDeniedError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     pdf_bytes = _build_pdf_bytes(document)
+    export = ResearchNoteExportORM(
+        project_id=note.project_id,
+        created_by=current_user.id,
+        status="rendering",
+        cover_snapshot_payload=json.dumps({"note_id": note.id}, ensure_ascii=False),
+        toc_snapshot_payload=None,
+        included_note_ids_json=json.dumps([note.id], ensure_ascii=False),
+        included_revision_ids_json=json.dumps([document.id], ensure_ascii=False),
+    )
+    db.add(export)
+    db.flush()
+    storage = LocalStorageService()
+    export_storage_key = storage.save_bytes(
+        pdf_bytes,
+        f"notes/{note.id}/exports/{export.id}",
+        "research-note.pdf",
+    )
+    export.pdf_storage_key = export_storage_key
+    export.file_size = len(pdf_bytes)
+    export.checksum = hashlib.sha256(pdf_bytes).hexdigest()
+    export.status = "ready"
+    export.completed_at = datetime.now(timezone.utc)
+    db.commit()
     filename = f"{note.title or document.title or 'research-note'}.pdf"
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-LabNote-Export-Id": export.id,
+        },
     )
 
 
 @router.post("/export-batch-pdf")
 def export_selected_note_documents_pdf_endpoint(
     payload: ResearchNoteBatchExportRequest,
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     merged_pdf = fitz.open()
@@ -1098,7 +1264,12 @@ def export_selected_note_documents_pdf_endpoint(
     note_export_data: list[tuple[ResearchNoteORM, DocumentSchemaPayload, list[ResearchNotePageORM]]] = []
 
     if payload.note_ids:
-        first_note = _get_note_or_404(db, payload.note_ids[0])
+        try:
+            first_note = get_research_note(db, payload.note_ids[0], current_user)
+        except ResearchNoteNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Research note not found") from exc
+        except ResearchNoteAccessDeniedError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         project = _get_project_or_404(db, first_note.project_id)
         _render_cover_page(
             merged_pdf,
@@ -1109,7 +1280,12 @@ def export_selected_note_documents_pdf_endpoint(
         )
 
     for note_id in payload.note_ids:
-        note, document = _get_export_document(db, note_id=note_id)
+        try:
+            note, document = _get_export_document(db, current_user=current_user, note_id=note_id)
+        except ResearchNoteNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Research note not found") from exc
+        except ResearchNoteAccessDeniedError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         note_pages = _list_note_source_pages(db, note.id)
         note_export_data.append((note, document, note_pages))
 
@@ -1153,8 +1329,49 @@ def export_selected_note_documents_pdf_endpoint(
 
     pdf_bytes = merged_pdf.tobytes(deflate=True, garbage=3)
     merged_pdf.close()
+    export_storage_key = None
+    if note_export_data:
+        project_id = note_export_data[0][0].project_id
+        export = ResearchNoteExportORM(
+            project_id=project_id,
+            created_by=current_user.id,
+            status="rendering",
+            cover_snapshot_payload=json.dumps({"project_id": project_id}, ensure_ascii=False),
+            toc_snapshot_payload=json.dumps(
+                [
+                    {"note_id": note.id, "title": note.title, "page_count": len(note_pages) if note_pages else 1}
+                    for note, _, note_pages in note_export_data
+                ],
+                ensure_ascii=False,
+            ),
+            included_note_ids_json=json.dumps([note.id for note, _, _ in note_export_data], ensure_ascii=False),
+            included_revision_ids_json=json.dumps(
+                [
+                    document.id
+                    for _, document, _ in note_export_data
+                ],
+                ensure_ascii=False,
+            ),
+        )
+        db.add(export)
+        db.flush()
+        storage = LocalStorageService()
+        export_storage_key = storage.save_bytes(
+            pdf_bytes,
+            f"notes/{project_id}/exports/{export.id}",
+            "research-notes.pdf",
+        )
+        export.pdf_storage_key = export_storage_key
+        export.file_size = len(pdf_bytes)
+        export.checksum = hashlib.sha256(pdf_bytes).hexdigest()
+        export.status = "ready"
+        export.completed_at = datetime.now(timezone.utc)
+        db.commit()
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
         media_type="application/pdf",
-        headers={"Content-Disposition": 'attachment; filename="research-notes.pdf"'},
+        headers={
+            "Content-Disposition": 'attachment; filename="research-notes.pdf"',
+            **({"X-LabNote-Export-Storage-Key": export_storage_key} if export_storage_key else {}),
+        },
     )

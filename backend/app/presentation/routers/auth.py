@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.domain.accounts.use_cases import (
@@ -7,9 +7,12 @@ from app.domain.accounts.use_cases import (
     UserAlreadyExistsError,
     get_company_access_request_status,
     get_user_by_id,
+    create_user_signature,
+    list_user_signatures,
     login_user,
     request_company_access,
     register_user,
+    revoke_user_signature,
     update_user_signature,
 )
 from app.infrastructure.db.session import get_db
@@ -21,6 +24,7 @@ from app.presentation.schemas.auth import (
     LoginRequest,
     SignUpRequest,
     SignatureUpdateRequest,
+    UserSignatureResponse,
     UserResponse,
 )
 
@@ -81,6 +85,44 @@ def update_signature_endpoint(
 ):
     updated = update_user_signature(db, current_user.id, payload.signature_data_url)
     return _build_user_response(updated, db)
+
+
+@router.get("/me/signatures", response_model=list[UserSignatureResponse])
+def list_my_signatures_endpoint(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    return list_user_signatures(db, user_id=current_user.id)
+
+
+@router.post("/me/signatures", response_model=UserSignatureResponse, status_code=status.HTTP_201_CREATED)
+async def create_my_signature_endpoint(
+    upload: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not (upload.content_type or "").startswith("image/"):
+        raise HTTPException(status_code=400, detail="Signature upload must be an image")
+    file_bytes = await upload.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Signature image is empty")
+    return create_user_signature(
+        db,
+        user_id=current_user.id,
+        filename=upload.filename or "signature.png",
+        file_bytes=file_bytes,
+        mime_type=upload.content_type,
+    )
+
+
+@router.delete("/me/signatures/{signature_id}", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_my_signature_endpoint(
+    signature_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        revoke_user_signature(db, user_id=current_user.id, signature_id=signature_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Signature not found") from exc
+    return None
 
 
 @router.get("/me/company-access-request", response_model=CompanyAccessRequestResponse)

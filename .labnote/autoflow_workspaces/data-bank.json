@@ -1,0 +1,30 @@
+{
+  "project_slug": "data-bank",
+  "project_name": "Data Bank",
+  "task_type": "research.sync",
+  "artifact_type": "research_preview",
+  "artifact_title": "Data Bank LabNote Preview",
+  "document_count": 3,
+  "source_documents": [
+    {
+      "id": 3,
+      "title": "자료 요약",
+      "relative_path": "research/source-summary.md",
+      "excerpt": "--- id: \"DOC-DATA-BANK-SOURCE-SUMMARY-003\" project_slug: \"data-bank\" project_name: \"Data Bank\" md_file_id: 3 workflow_card_id: 3 card_title: \"자료 요약\" type: \"source-summary\" document_type: \"source-summary\" template_code: \"..."
+    },
+    {
+      "id": 7,
+      "title": "기획서",
+      "relative_path": "planning/project-plan.md",
+      "excerpt": "--- id: \"DOC-DATA-BANK-PROJECT-PLAN-007\" project_slug: \"data-bank\" project_name: \"Data Bank\" md_file_id: 7 workflow_card_id: 7 card_title: \"기획서\" type: \"project-plan\" document_type: \"project-plan\" template_code: \"project_..."
+    },
+    {
+      "id": 14,
+      "title": "사용자 흐름도",
+      "relative_path": "design/user-flow.md",
+      "excerpt": "--- id: \"DOC-DATA-BANK-USER-FLOW-014\" project_slug: \"data-bank\" project_name: \"Data Bank\" md_file_id: 14 workflow_card_id: 14 card_title: \"사용자 흐름도\" type: \"user-flow\" document_type: \"user-flow\" template_code: \"user_flow\"..."
+    }
+  ],
+  "metadata": {},
+  "updated_at": "2026-05-31T13:24:15.956139+00:00"
+}
