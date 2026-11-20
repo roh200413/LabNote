@@ -37,6 +37,19 @@ class AdminUserResponse(BaseModel):
     created_at: datetime
 
 
+class AdminUserCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    email: str = Field(min_length=3, max_length=254)
+    password: str | None = Field(default=None, max_length=128)
+    organization_id: int | None = None
+    role: str = "member"
+
+
+class AdminUserCreateResponse(BaseModel):
+    user: AdminUserResponse
+    temporary_password: str | None = None
+
+
 class AdminUserUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     is_active: bool | None = None
@@ -57,11 +70,12 @@ class OrganizationResponse(BaseModel):
 
 class OrganizationCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
-    code: str = Field(min_length=6, max_length=6)
+    # Join codes are 9 characters; leave empty to have one generated.
+    code: str | None = Field(default=None, max_length=9)
 
 
 class OrganizationUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
-    code: str | None = Field(default=None, min_length=6, max_length=6)
+    code: str | None = Field(default=None, min_length=9, max_length=9)
     description: str | None = None
     is_active: bool | None = None

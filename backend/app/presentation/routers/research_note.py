@@ -42,7 +42,7 @@ def create_research_note_endpoint(
     try:
         return create_research_note(db, current_user, **payload.model_dump())
     except ProjectNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Project not found") from exc
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다") from exc
     except (ResearchNoteAccessDeniedError, ResearchNoteManageDeniedError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
@@ -58,7 +58,7 @@ def list_research_notes_endpoint(
     try:
         return list_research_notes(db, current_user, project_id=project_id)
     except ProjectNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Project not found") from exc
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다") from exc
     except ResearchNoteAccessDeniedError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -72,7 +72,7 @@ def get_research_note_endpoint(
     try:
         return get_research_note(db, note_id, current_user)
     except ResearchNoteNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Research note not found") from exc
+        raise HTTPException(status_code=404, detail="연구노트를 찾을 수 없습니다") from exc
     except ResearchNoteAccessDeniedError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -87,7 +87,7 @@ def update_research_note_endpoint(
     try:
         return update_research_note(db, note_id, current_user, **payload.model_dump(exclude_unset=True))
     except ResearchNoteNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Research note not found") from exc
+        raise HTTPException(status_code=404, detail="연구노트를 찾을 수 없습니다") from exc
     except (ResearchNoteAccessDeniedError, ResearchNoteManageDeniedError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ResearchNoteStateError as exc:
@@ -112,7 +112,7 @@ def assign_research_note_members_endpoint(
             reviewer_member_id=payload.reviewer_member_id,
         )
     except ResearchNoteNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Research note not found") from exc
+        raise HTTPException(status_code=404, detail="연구노트를 찾을 수 없습니다") from exc
     except (ResearchNoteAccessDeniedError, ResearchNoteManageDeniedError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ResearchNoteStateError as exc:
@@ -130,7 +130,7 @@ def delete_research_note_endpoint(
     try:
         delete_research_note(db, note_id, current_user)
     except ResearchNoteNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Research note not found") from exc
+        raise HTTPException(status_code=404, detail="연구노트를 찾을 수 없습니다") from exc
     except (ResearchNoteAccessDeniedError, ResearchNoteManageDeniedError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -145,7 +145,7 @@ def list_approval_events_endpoint(
     try:
         return list_approval_events(db, note_id, current_user)
     except ResearchNoteNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Research note not found") from exc
+        raise HTTPException(status_code=404, detail="연구노트를 찾을 수 없습니다") from exc
     except ResearchNoteAccessDeniedError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -160,7 +160,7 @@ def submit_research_note_endpoint(
     try:
         return submit_research_note(db, note_id, current_user, comment=payload.comment if payload else None)
     except ResearchNoteNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Research note not found") from exc
+        raise HTTPException(status_code=404, detail="연구노트를 찾을 수 없습니다") from exc
     except (ResearchNoteAccessDeniedError, ResearchNoteManageDeniedError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ResearchNoteStateError as exc:
@@ -177,7 +177,7 @@ def approve_research_note_endpoint(
     try:
         return approve_research_note(db, note_id, current_user, comment=payload.comment if payload else None)
     except ResearchNoteNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Research note not found") from exc
+        raise HTTPException(status_code=404, detail="연구노트를 찾을 수 없습니다") from exc
     except (ResearchNoteAccessDeniedError, ResearchNoteManageDeniedError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ResearchNoteStateError as exc:
@@ -194,7 +194,7 @@ def reject_research_note_endpoint(
     try:
         return reject_research_note(db, note_id, current_user, comment=payload.comment)
     except ResearchNoteNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Research note not found") from exc
+        raise HTTPException(status_code=404, detail="연구노트를 찾을 수 없습니다") from exc
     except (ResearchNoteAccessDeniedError, ResearchNoteManageDeniedError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ResearchNoteStateError as exc:
@@ -211,7 +211,7 @@ def reopen_research_note_endpoint(
     try:
         return reopen_research_note(db, note_id, current_user, comment=payload.comment)
     except ResearchNoteNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Research note not found") from exc
+        raise HTTPException(status_code=404, detail="연구노트를 찾을 수 없습니다") from exc
     except (ResearchNoteAccessDeniedError, ResearchNoteManageDeniedError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ResearchNoteStateError as exc:

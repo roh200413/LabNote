@@ -5,7 +5,7 @@ import io
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import unquote_to_bytes
+from urllib.parse import quote, unquote_to_bytes
 
 import fitz
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
@@ -20,6 +20,15 @@ from app.domain.research_notes.document_editor_use_cases import (
     list_note_documents,
     save_note_document,
     upload_editor_image,
+)
+from app.core.config import get_settings
+from app.domain.note_formats.entities import DEFAULT_NOTE_FORMAT, NoteFormat
+from app.domain.note_formats.use_cases import get_note_format_for_note
+from app.domain.research_notes.note_generation import (
+    NoteGenerationFailedError,
+    NoteGenerationUnavailableError,
+    NoteGenerator,
+    generate_note_draft,
 )
 from app.domain.research_notes.use_cases import (
     ResearchNoteAccessDeniedError,
@@ -46,12 +55,17 @@ from app.infrastructure.db.models import (
     UserAccountORM,
 )
 from app.infrastructure.db.session import get_db
+from app.infrastructure.llm.openai_note_generator import build_note_generator
 from app.infrastructure.storage.local_storage import LocalStorageService
 from app.presentation.dependencies.auth import get_current_user
 from app.presentation.schemas.document_editor import (
     DocumentSchemaPayload,
     EditorImageUploadResponse,
+    GeneratedSectionSchema,
     ImageBlockSchema,
+    NoteGenerationRequest,
+    NoteGenerationResponse,
+    NoteGenerationStatusResponse,
     ResearchNoteBatchExportRequest,
     ResearchNoteDocumentResponse,
     ResearchNoteDocumentSaveRequest,
@@ -78,6 +92,13 @@ FIXED_TEXT_IDS = {
     "witnessed-date",
 }
 FIXED_IMAGE_IDS = {"author-signature", "reviewer-signature", "content-image"}
+
+# Signature boxes sit inside the footer's "서명" cells (x 250-510; rows 955-1026 and 1026-1098),
+# below the cell label and inset from the grid lines. Mirrored in frontend HomePage.tsx.
+SIGNATURE_RECTS = {
+    "author-signature": {"x": 256, "y": 975, "w": 248, "h": 47},
+    "reviewer-signature": {"x": 256, "y": 1046, "w": 248, "h": 48},
+}
 FIXED_BLOCK_IDS = FIXED_TEXT_IDS | FIXED_IMAGE_IDS
 
 
@@ -153,10 +174,37 @@ def _fit_image_rect(image_width: int, image_height: int) -> tuple[int, int, int,
     return (offset_x, offset_y, fitted_width, fitted_height)
 
 
-def _fit_image_rect_from_src(src: str, cache: dict[str, bytes] | None = None) -> tuple[int, int, int, int]:
+def _fit_image_rect_from_src(
+    src: str,
+    cache: dict[str, bytes] | None = None,
+    frame: tuple[int, int, int, int] | None = None,
+) -> tuple[int, int, int, int]:
     image_bytes = _resolve_image_bytes(src, cache)
     pix = fitz.Pixmap(image_bytes)
-    return _fit_image_rect(pix.width, pix.height)
+    if frame is None:
+        return _fit_image_rect(pix.width, pix.height)
+    frame_x, frame_y, frame_w, frame_h = frame
+    if pix.width <= 0 or pix.height <= 0:
+        return frame
+    # Keep the aspect ratio inside the rect the user arranged in the editor.
+    scale = min(frame_w / pix.width, frame_h / pix.height)
+    fitted_w = round(pix.width * scale)
+    fitted_h = round(pix.height * scale)
+    return (
+        round(frame_x + (frame_w - fitted_w) / 2),
+        round(frame_y + (frame_h - fitted_h) / 2),
+        fitted_w,
+        fitted_h,
+    )
+
+
+def _hex_to_rgb(color: str | None) -> tuple[float, float, float]:
+    if not color or len(color) != 7 or not color.startswith("#"):
+        return (0.0, 0.0, 0.0)
+    try:
+        return (int(color[1:3], 16) / 255, int(color[3:5], 16) / 255, int(color[5:7], 16) / 255)
+    except ValueError:
+        return (0.0, 0.0, 0.0)
 
 
 def _build_research_note_page_template_svg() -> str:
@@ -180,28 +228,42 @@ def _build_research_note_page_template_svg() -> str:
     return f"data:image/svg+xml;charset=UTF-8,{svg.strip()}"
 
 
-def _draw_research_note_template(page: fitz.Page, page_number: int | None = None) -> None:
+def _draw_research_note_template(
+    page: fitz.Page,
+    page_number: int | None = None,
+    note_format: NoteFormat | None = None,
+    label_font: str = "helv",
+) -> None:
+    fmt = note_format or DEFAULT_NOTE_FORMAT
     shape = page.new_shape()
     shape.draw_rect(fitz.Rect(20, 25, 774, 1098))
-    shape.draw_line(fitz.Point(20, 55), fitz.Point(774, 55))
-    shape.draw_line(fitz.Point(20, 955), fitz.Point(774, 955))
-    shape.draw_line(fitz.Point(20, 1026), fitz.Point(774, 1026))
-    shape.draw_line(fitz.Point(250, 955), fitz.Point(250, 1098))
-    shape.draw_line(fitz.Point(510, 955), fitz.Point(510, 1098))
+    if fmt.header.show:
+        shape.draw_line(fitz.Point(20, 55), fitz.Point(774, 55))
+    if fmt.footer.show:
+        shape.draw_line(fitz.Point(20, 955), fitz.Point(774, 955))
+        shape.draw_line(fitz.Point(20, 1026), fitz.Point(774, 1026))
+        shape.draw_line(fitz.Point(250, 955), fitz.Point(250, 1098))
+        shape.draw_line(fitz.Point(510, 955), fitz.Point(510, 1098))
     shape.finish(color=(0.58, 0.64, 0.72), width=1)
     shape.commit()
 
-    labels = [
-        ("Title :", fitz.Point(32, 44), 12),
-        ("Recorded By", fitz.Point(32, 971), 11),
-        ("Signature", fitz.Point(270, 971), 11),
-        ("Date", fitz.Point(528, 971), 11),
-        ("Witnessed By", fitz.Point(32, 1042), 11),
-        ("Signature", fitz.Point(270, 1042), 11),
-        ("Date", fitz.Point(528, 1042), 11),
-    ]
+    labels: list[tuple[str, fitz.Point, int]] = []
+    if fmt.header.show:
+        labels.append((fmt.header.title_label, fitz.Point(32, 44), 12))
+    if fmt.footer.show:
+        footer = fmt.footer
+        labels += [
+            (footer.recorded_label, fitz.Point(32, 971), 11),
+            (footer.signature_label, fitz.Point(270, 971), 11),
+            (footer.date_label, fitz.Point(528, 971), 11),
+            (footer.witnessed_label, fitz.Point(32, 1042), 11),
+            (footer.signature_label, fitz.Point(270, 1042), 11),
+            (footer.date_label, fitz.Point(528, 1042), 11),
+        ]
     for text, point, size in labels:
-        page.insert_text(point, text, fontsize=size, fontname="helv", color=(0.2, 0.25, 0.31))
+        if text:
+            # Custom labels may be Korean, so use the embedded Korean font when available.
+            page.insert_text(point, text, fontsize=size, fontname=label_font, color=(0.2, 0.25, 0.31))
     if page_number is not None:
         page.insert_text(
             fitz.Point(388, 1116),
@@ -239,7 +301,7 @@ def _make_text_block(
 def _get_note_or_404(db: Session, note_id: str) -> ResearchNoteORM:
     note = db.get(ResearchNoteORM, note_id)
     if note is None or note.is_deleted:
-        raise HTTPException(status_code=404, detail="Research note not found")
+        raise HTTPException(status_code=404, detail="연구노트를 찾을 수 없습니다")
     return note
 
 
@@ -255,7 +317,7 @@ def _get_latest_note_document(db: Session, note_id: str) -> ResearchNoteDocument
 def _get_project_or_404(db: Session, project_id: str) -> ProjectORM:
     project = db.get(ProjectORM, project_id)
     if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
     return project
 
 
@@ -347,10 +409,18 @@ def _build_note_template_context(db: Session, note: ResearchNoteORM) -> dict[str
     }
 
 
-def _build_note_template_blocks(db: Session, note: ResearchNoteORM) -> list[TextBlockSchema | ImageBlockSchema]:
+def _build_note_template_blocks(
+    db: Session, note: ResearchNoteORM, note_format: NoteFormat | None = None
+) -> list[TextBlockSchema | ImageBlockSchema]:
+    fmt = note_format or DEFAULT_NOTE_FORMAT
     context = _build_note_template_context(db, note)
-    blocks: list[TextBlockSchema | ImageBlockSchema] = [
-        _make_text_block("note-title", 82, 26, 640, 20, note.title, font_size=13, align="left"),
+    blocks: list[TextBlockSchema | ImageBlockSchema] = []
+    if fmt.header.show:
+        blocks.append(_make_text_block("note-title", 82, 26, 640, 20, note.title, font_size=13, align="left"))
+    if not fmt.footer.show:
+        return blocks
+
+    blocks += [
         _make_text_block("continued-page", 652, 946, 92, 14, "", font_size=11, align="left"),
         _make_text_block("recorded-by", 34, 983, 200, 38, str(context["author_name"] or ""), font_size=16, align="center"),
         _make_text_block("recorded-date", 528, 983, 140, 38, str(context["written_date"] or ""), font_size=16, align="center"),
@@ -363,10 +433,7 @@ def _build_note_template_blocks(db: Session, note: ResearchNoteORM) -> list[Text
             ImageBlockSchema(
                 id="author-signature",
                 type="image",
-                x=258,
-                y=975,
-                w=194,
-                h=58,
+                **SIGNATURE_RECTS["author-signature"],
                 locked=True,
                 src=str(context["author_signature_url"]),
             )
@@ -377,10 +444,7 @@ def _build_note_template_blocks(db: Session, note: ResearchNoteORM) -> list[Text
             ImageBlockSchema(
                 id="reviewer-signature",
                 type="image",
-                x=258,
-                y=1046,
-                w=194,
-                h=52,
+                **SIGNATURE_RECTS["reviewer-signature"],
                 locked=True,
                 src=str(context["reviewer_signature_url"]),
             )
@@ -389,17 +453,24 @@ def _build_note_template_blocks(db: Session, note: ResearchNoteORM) -> list[Text
     return blocks
 
 
-def _build_default_note_document(db: Session, note: ResearchNoteORM, source_page: ResearchNotePageORM | None) -> DocumentSchemaPayload:
-    blocks: list[TextBlockSchema | ImageBlockSchema] = _build_note_template_blocks(db, note)
-    if source_page is not None:
+def _build_default_note_document(
+    db: Session,
+    note: ResearchNoteORM,
+    source_page: ResearchNotePageORM | None,
+    note_format: NoteFormat | None = None,
+) -> DocumentSchemaPayload:
+    fmt = note_format or DEFAULT_NOTE_FORMAT
+    blocks: list[TextBlockSchema | ImageBlockSchema] = _build_note_template_blocks(db, note, fmt)
+    image_rect = fmt.content_image_rect()
+    if source_page is not None and image_rect is not None:
         blocks.append(
             ImageBlockSchema(
                 id="content-image",
                 type="image",
-                x=CONTENT_IMAGE_RECT[0],
-                y=CONTENT_IMAGE_RECT[1],
-                w=CONTENT_IMAGE_RECT[2],
-                h=CONTENT_IMAGE_RECT[3],
+                x=image_rect[0],
+                y=image_rect[1],
+                w=image_rect[2],
+                h=image_rect[3],
                 locked=False,
                 src=f"/storage/{source_page.image_storage_key}",
             )
@@ -409,7 +480,7 @@ def _build_default_note_document(db: Session, note: ResearchNoteORM, source_page
         {
             "schemaVersion": 1,
             "id": f"draft-{note.id}",
-            "title": f"{note.title} Layout",
+            "title": f"{note.title} 레이아웃",
             "page": {
                 "width": PAGE_WIDTH,
                 "height": PAGE_HEIGHT,
@@ -432,12 +503,13 @@ def _normalize_document_for_export(
     document: DocumentSchemaPayload | None,
 ) -> DocumentSchemaPayload:
     image_cache: dict[str, bytes] = {}
+    note_format = get_note_format_for_note(db, note)
     source_page = _get_note_source_page(db, note.id, document.meta.source_page_id if document else None)
-    template_blocks = _build_note_template_blocks(db, note)
+    template_blocks = _build_note_template_blocks(db, note, note_format)
     template_by_id = {block.id: block for block in template_blocks}
 
     if document is None:
-        return _build_default_note_document(db, note, source_page)
+        return _build_default_note_document(db, note, source_page, note_format)
 
     kept_blocks: list[TextBlockSchema | ImageBlockSchema] = []
     has_content_image = False
@@ -449,9 +521,13 @@ def _normalize_document_for_export(
                 src = block.src
                 if not src and source_page is not None:
                     src = f"/storage/{source_page.image_storage_key}"
-                fitted_x, fitted_y, fitted_w, fitted_h = (
-                    _fit_image_rect_from_src(src, image_cache) if src else CONTENT_IMAGE_RECT
-                )
+                user_frame = (block.x, block.y, block.w, block.h) if block.w > 0 and block.h > 0 else None
+                try:
+                    fitted_x, fitted_y, fitted_w, fitted_h = (
+                        _fit_image_rect_from_src(src, image_cache, user_frame) if src else CONTENT_IMAGE_RECT
+                    )
+                except FileNotFoundError:
+                    fitted_x, fitted_y, fitted_w, fitted_h = user_frame or CONTENT_IMAGE_RECT
                 kept_blocks.append(
                     ImageBlockSchema(
                         id="content-image",
@@ -479,15 +555,21 @@ def _normalize_document_for_export(
             template_block = template_by_id[block.id]
             if isinstance(template_block, TextBlockSchema):
                 kept_blocks.append(template_block)
+            continue
+
+        if block.id not in FIXED_TEXT_IDS:
+            # Free text blocks added in the editor (including AI drafts).
+            kept_blocks.append(block)
 
     existing_ids = {block.id for block in kept_blocks}
     for template_block in template_blocks:
         if template_block.id not in existing_ids:
             kept_blocks.append(template_block)
 
-    if not has_content_image and source_page is not None:
+    format_image_rect = note_format.content_image_rect()
+    if not has_content_image and source_page is not None and format_image_rect is not None:
         src = f"/storage/{source_page.image_storage_key}"
-        fitted_x, fitted_y, fitted_w, fitted_h = _fit_image_rect_from_src(src, image_cache)
+        fitted_x, fitted_y, fitted_w, fitted_h = _fit_image_rect_from_src(src, image_cache, format_image_rect)
         kept_blocks.append(
             ImageBlockSchema(
                 id="content-image",
@@ -631,9 +713,18 @@ def _render_cover_page(
     title = _payload_str(payload, "projectTitle", "title") if override_project_title else default_title
     organization = _payload_str(payload, "organization", "businessName") if override_organization else default_organization
     investigator = _payload_str(payload, "principalInvestigator", "managerName") if override_principal_investigator else default_investigator
-    project_code = default_project_code
-    period = default_period
-    footer_note = "Research records are maintained according to the registered project information."
+    project_code = (
+        _payload_str(payload, "projectCode") if _payload_bool(payload, "overrideProjectCode", default=False) else default_project_code
+    )
+    period = _payload_str(payload, "projectPeriod") if _payload_bool(payload, "overrideProjectPeriod", default=False) else default_period
+    top_text = (_payload_str(payload, "coverTitle") or "연구노트") if _payload_bool(payload, "showTopLabel", default=True) else ""
+    footer_note = (
+        (_payload_str(payload, "footerNote") or "연구 기록은 등록된 과제 정보에 따라 관리됩니다.")
+        if _payload_bool(payload, "showFooter", default=True)
+        else ""
+    )
+    if footer_note == "이 표지 템플릿은 연구노트 묶음에 사용됩니다.":
+        footer_note = "연구 기록은 등록된 과제 정보에 따라 관리됩니다."
 
     frame = COVER_LAYOUT["frame"]
     top_label = COVER_LAYOUT["top_label"]
@@ -654,7 +745,7 @@ def _render_cover_page(
 
     page.insert_textbox(
         fitz.Rect(0, top_label["top"], PAGE_WIDTH, top_label["top"] + top_label["height"]),
-        "연구노트",
+        top_text,
         fontname=text_font_name,
         fontsize=top_label["font_size"],
         align=fitz.TEXT_ALIGN_CENTER,
@@ -684,7 +775,7 @@ def _render_cover_page(
         ("과제번호", project_code if show_code else ""),
         ("연구책임자", investigator if show_principal_investigator else ""),
         ("연구기관", organization if show_organization else ""),
-        ("기간", period if show_project_period else ""),
+        ("연구 기간", period if show_project_period else ""),
     ]
     shape = page.new_shape()
     shape.draw_rect(fitz.Rect(table_x, table_y, table_x + label_w + value_w, table_y + row_h * len(rows)))
@@ -821,17 +912,32 @@ def _render_document_page(
     image_cache: dict[str, bytes] | None = None,
     *,
     page_number: int | None = None,
+    note_format: NoteFormat | None = None,
 ) -> None:
     page = pdf.new_page(width=document.page.width, height=document.page.height)
     text_font_name = "helv"
+    bold_font_name = "hebo"
     korean_font_path = Path("C:/Windows/Fonts/malgun.ttf")
     if korean_font_path.exists():
         page.insert_font(fontname="notekr", fontfile=str(korean_font_path))
         text_font_name = "notekr"
+        bold_font_name = "notekr"
+        korean_bold_font_path = Path("C:/Windows/Fonts/malgunbd.ttf")
+        # Fonts are embedded whole, so only add the bold face when a free text block uses it.
+        needs_bold = any(
+            block.type == "text"
+            and block.id not in FIXED_TEXT_IDS
+            and block.style is not None
+            and block.style.font_weight == "bold"
+            for block in document.blocks
+        )
+        if needs_bold and korean_bold_font_path.exists():
+            page.insert_font(fontname="notekrb", fontfile=str(korean_bold_font_path))
+            bold_font_name = "notekrb"
 
     if document.page.background_image:
         if document.page.background_image.startswith("data:image/svg+xml"):
-            _draw_research_note_template(page, page_number)
+            _draw_research_note_template(page, page_number, note_format, text_font_name)
         else:
             try:
                 background_bytes = _resolve_image_bytes(document.page.background_image, image_cache)
@@ -891,29 +997,52 @@ def _render_document_page(
             continue
 
         style = block.style or TextStyleSchema()
-        inserted = page.insert_textbox(
-            rect,
-            block.content,
-            fontsize=style.font_size,
-            fontname=text_font_name,
-            align={"left": 0, "center": 1, "right": 2}.get(style.text_align, 0),
-            color=(0, 0, 0),
-            overlay=True,
+        font_name = bold_font_name if style.font_weight == "bold" else text_font_name
+        _draw_text_box(page, block.content, rect, font_name=font_name, style=style)
+
+
+def _draw_text_box(
+    page: fitz.Page,
+    text: str,
+    rect: fitz.Rect,
+    *,
+    font_name: str,
+    style: TextStyleSchema,
+) -> None:
+    """Draw wrapped text, shrinking the font until it fits inside the block."""
+    if not text.strip():
+        return
+    padded = fitz.Rect(rect.x0 + 4, rect.y0 + 4, rect.x1 - 4, rect.y1 - 4)
+    align = {"left": 0, "center": 1, "right": 2}.get(style.text_align, 0)
+    color = _hex_to_rgb(style.color)
+
+    def try_insert(content: str, size: float) -> bool:
+        shape = page.new_shape()
+        remaining = shape.insert_textbox(
+            padded, content, fontsize=size, fontname=font_name, align=align, color=color, lineheight=1.35
         )
-        if inserted < 0:
-            _draw_text_in_rect(
-                page,
-                block.content,
-                rect,
-                font_name=text_font_name,
-                font_size=style.font_size,
-                align=style.text_align,
-            )
+        if remaining < 0:
+            return False
+        shape.commit(overlay=True)
+        return True
+
+    font_size = float(style.font_size)
+    while font_size > 6:
+        if try_insert(text, font_size):
+            return
+        font_size -= 1
+
+    # Still too long at the minimum size: keep as many leading lines as fit.
+    lines = text.splitlines()
+    while len(lines) > 1:
+        lines.pop()
+        if try_insert("\n".join(lines) + "\n…", font_size):
+            return
 
 
-def _build_pdf_bytes(document: DocumentSchemaPayload) -> bytes:
+def _build_pdf_bytes(document: DocumentSchemaPayload, note_format: NoteFormat | None = None) -> bytes:
     pdf = fitz.open()
-    _render_document_page(pdf, document, {}, page_number=1)
+    _render_document_page(pdf, document, {}, page_number=1, note_format=note_format)
     return pdf.tobytes(deflate=True, garbage=3)
 
 
@@ -926,7 +1055,11 @@ def _build_document_for_page(
 ) -> DocumentSchemaPayload:
     next_blocks: list[TextBlockSchema | ImageBlockSchema] = []
     page_src = f"/storage/{page.image_storage_key}"
-    fitted_x, fitted_y, fitted_w, fitted_h = _fit_image_rect_from_src(page_src, {})
+    current_image = next(
+        (block for block in document.blocks if block.id == "content-image" and block.type == "image"), None
+    )
+    image_frame = (current_image.x, current_image.y, current_image.w, current_image.h) if current_image else None
+    fitted_x, fitted_y, fitted_w, fitted_h = _fit_image_rect_from_src(page_src, {}, image_frame)
 
     for block in document.blocks:
         if block.id == "content-image" and block.type == "image":
@@ -1018,7 +1151,7 @@ def list_note_documents_endpoint(
     try:
         documents = list_note_documents(db, note_id, current_user)
     except ResearchNoteDocumentNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Research note not found") from exc
+        raise HTTPException(status_code=404, detail="연구노트를 찾을 수 없습니다") from exc
     except (ResearchNoteNotFoundError, ResearchNoteAccessDeniedError) as exc:
         status_code = 404 if isinstance(exc, ResearchNoteNotFoundError) else 403
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
@@ -1048,9 +1181,88 @@ def get_note_document_endpoint(
     try:
         return _to_response(get_note_document(db, document_id, current_user), db)
     except ResearchNoteDocumentNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Research note document not found") from exc
+        raise HTTPException(status_code=404, detail="연구노트 문서를 찾을 수 없습니다") from exc
     except ResearchNoteAccessDeniedError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+async def get_note_generator(request: Request, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.domain.note_formats.use_cases import _primary_membership
+    from app.infrastructure.llm.connections import resolve_settings
+    from app.presentation.routers.llm import api_errors
+
+    with api_errors():
+        membership = _primary_membership(db, current_user)
+        company_id = membership.company_id if membership else None
+        if request.method == "POST":
+            payload = await request.json()
+            if not isinstance(payload, dict):
+                payload = {}
+            note_id = payload.get("noteId") or payload.get("note_id")
+            if note_id:
+                note = get_research_note(db, note_id, current_user)
+                company_id = db.get(ProjectORM, note.project_id).company_id
+        settings = resolve_settings(db, company_id) if company_id is not None else get_settings()
+        generator = build_note_generator(settings) if settings else None
+    try:
+        yield generator
+    finally:
+        if generator is not None:
+            generator.close()
+
+
+@router.get("/ai/status", response_model=NoteGenerationStatusResponse)
+def note_generation_status_endpoint(
+    current_user=Depends(get_current_user),
+    generator: NoteGenerator | None = Depends(get_note_generator),
+):
+    return NoteGenerationStatusResponse(
+        enabled=generator is not None,
+        provider="LLM API",
+        model=generator.model if generator is not None else None,
+        max_pages=get_settings().llm_max_pages,
+    )
+
+
+@router.post("/ai/generate", response_model=NoteGenerationResponse)
+def generate_note_draft_endpoint(
+    payload: NoteGenerationRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+    generator: NoteGenerator | None = Depends(get_note_generator),
+):
+    settings = get_settings()
+    try:
+        generated = generate_note_draft(
+            db,
+            note_id=payload.note_id,
+            page_ids=payload.page_ids,
+            memo=payload.memo,
+            language=payload.language,
+            existing_text=payload.existing_text,
+            current_user=current_user,
+            generator=generator,
+            max_pages=settings.llm_max_pages,
+            image_max_side=settings.llm_image_max_side,
+        )
+    except ResearchNoteNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="연구노트를 찾을 수 없습니다") from exc
+    except (ResearchNoteAccessDeniedError, ResearchNoteManageDeniedError) as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ResearchNoteStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except NoteGenerationUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except NoteGenerationFailedError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return NoteGenerationResponse(
+        sections=[GeneratedSectionSchema(heading=item.heading, body=item.body) for item in generated.sections],
+        text=generated.as_text(),
+        model=generated.model,
+    )
 
 
 @router.post("", response_model=ResearchNoteDocumentResponse, status_code=status.HTTP_201_CREATED)
@@ -1072,7 +1284,7 @@ def create_note_document_endpoint(
         )
         return _to_response(document, db)
     except ResearchNoteDocumentNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Research note document not found") from exc
+        raise HTTPException(status_code=404, detail="연구노트 문서를 찾을 수 없습니다") from exc
     except (ResearchNoteAccessDeniedError, ResearchNoteManageDeniedError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ResearchNoteStateError as exc:
@@ -1101,7 +1313,7 @@ def update_note_document_endpoint(
         )
         return _to_response(document, db)
     except ResearchNoteDocumentNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Research note document not found") from exc
+        raise HTTPException(status_code=404, detail="연구노트 문서를 찾을 수 없습니다") from exc
     except (ResearchNoteAccessDeniedError, ResearchNoteManageDeniedError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ResearchNoteStateError as exc:
@@ -1165,11 +1377,11 @@ def get_research_note_export_endpoint(
 ) -> ResearchNoteExportResponse:
     export = db.get(ResearchNoteExportORM, export_id)
     if export is None:
-        raise HTTPException(status_code=404, detail="Research note export not found")
+        raise HTTPException(status_code=404, detail="연구노트 내보내기 기록을 찾을 수 없습니다")
     try:
         require_project_access(db, export.project_id, current_user)
     except ProjectNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Project not found") from exc
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다") from exc
     except ProjectAccessDeniedError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     return _export_response(export)
@@ -1183,17 +1395,17 @@ def download_research_note_export_endpoint(
 ):
     export = db.get(ResearchNoteExportORM, export_id)
     if export is None or export.status != "ready" or not export.pdf_storage_key:
-        raise HTTPException(status_code=404, detail="Research note export not found")
+        raise HTTPException(status_code=404, detail="연구노트 내보내기 기록을 찾을 수 없습니다")
     try:
         require_project_access(db, export.project_id, current_user)
     except ProjectNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Project not found") from exc
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다") from exc
     except ProjectAccessDeniedError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     storage = LocalStorageService()
     pdf_path = storage.absolute_path(export.pdf_storage_key)
     if not pdf_path.exists():
-        raise HTTPException(status_code=404, detail="Export PDF file not found")
+        raise HTTPException(status_code=404, detail="내보낸 PDF 파일을 찾을 수 없습니다")
     return StreamingResponse(
         io.BytesIO(pdf_path.read_bytes()),
         media_type="application/pdf",
@@ -1215,10 +1427,10 @@ def export_note_document_pdf_endpoint(
             document_id=payload.document_id,
         )
     except ResearchNoteNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Research note not found") from exc
+        raise HTTPException(status_code=404, detail="연구노트를 찾을 수 없습니다") from exc
     except ResearchNoteAccessDeniedError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
-    pdf_bytes = _build_pdf_bytes(document)
+    pdf_bytes = _build_pdf_bytes(document, get_note_format_for_note(db, note))
     export = ResearchNoteExportORM(
         project_id=note.project_id,
         created_by=current_user.id,
@@ -1243,11 +1455,13 @@ def export_note_document_pdf_endpoint(
     export.completed_at = datetime.now(timezone.utc)
     db.commit()
     filename = f"{note.title or document.title or 'research-note'}.pdf"
+    # Headers must be latin-1: ASCII fallback plus RFC 5987 UTF-8 name for Korean titles.
+    ascii_filename = filename.encode("ascii", "ignore").decode().replace('"', "").strip() or "research-note.pdf"
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Disposition": f"attachment; filename=\"{ascii_filename}\"; filename*=UTF-8''{quote(filename)}",
             "X-LabNote-Export-Id": export.id,
         },
     )
@@ -1267,7 +1481,7 @@ def export_selected_note_documents_pdf_endpoint(
         try:
             first_note = get_research_note(db, payload.note_ids[0], current_user)
         except ResearchNoteNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Research note not found") from exc
+            raise HTTPException(status_code=404, detail="연구노트를 찾을 수 없습니다") from exc
         except ResearchNoteAccessDeniedError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         project = _get_project_or_404(db, first_note.project_id)
@@ -1283,7 +1497,7 @@ def export_selected_note_documents_pdf_endpoint(
         try:
             note, document = _get_export_document(db, current_user=current_user, note_id=note_id)
         except ResearchNoteNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Research note not found") from exc
+            raise HTTPException(status_code=404, detail="연구노트를 찾을 수 없습니다") from exc
         except ResearchNoteAccessDeniedError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         note_pages = _list_note_source_pages(db, note.id)
@@ -1311,8 +1525,11 @@ def export_selected_note_documents_pdf_endpoint(
             _render_toc_page(merged_pdf, entries=chunk, show_title=toc_page_index == 0)
 
     for note, document, note_pages in note_export_data:
+        note_format = get_note_format_for_note(db, note)
         if not note_pages:
-            _render_document_page(merged_pdf, document, image_cache, page_number=merged_pdf.page_count + 1)
+            _render_document_page(
+                merged_pdf, document, image_cache, page_number=merged_pdf.page_count + 1, note_format=note_format
+            )
             continue
 
         for page_index, note_page in enumerate(note_pages):
@@ -1322,10 +1539,12 @@ def export_selected_note_documents_pdf_endpoint(
                 page_index=page_index,
                 total_pages=len(note_pages),
             )
-            _render_document_page(merged_pdf, page_document, image_cache, page_number=merged_pdf.page_count + 1)
+            _render_document_page(
+                merged_pdf, page_document, image_cache, page_number=merged_pdf.page_count + 1, note_format=note_format
+            )
 
     if merged_pdf.page_count == 0:
-        raise HTTPException(status_code=404, detail="No research notes available for PDF export")
+        raise HTTPException(status_code=404, detail="PDF로 내보낼 연구노트가 없습니다")
 
     pdf_bytes = merged_pdf.tobytes(deflate=True, garbage=3)
     merged_pdf.close()

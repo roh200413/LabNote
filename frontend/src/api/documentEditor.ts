@@ -7,15 +7,63 @@ type DownloadProgress = {
   percent: number | null;
 };
 
+export type NoteGenerationStatus = {
+  enabled: boolean;
+  provider: string;
+  model: string | null;
+  max_pages: number;
+};
+
+export type GeneratedNoteDraft = {
+  sections: { heading: string; body: string }[];
+  text: string;
+  model: string;
+};
+
+const AI_GENERATION_TIMEOUT_MS = 180_000;
+
+async function readErrorDetail(response: Response, fallback: string): Promise<string> {
+  try {
+    const body = await response.json();
+    if (typeof body?.detail === "string") return body.detail;
+  } catch {
+    // Non-JSON error bodies fall back to the generic message.
+  }
+  return fallback;
+}
+
+export async function getNoteGenerationStatus(): Promise<NoteGenerationStatus> {
+  const response = await apiFetch("/research-note-documents/ai/status");
+  if (!response.ok) throw new Error(await readErrorDetail(response, "AI 상태를 불러오지 못했습니다"));
+  return response.json();
+}
+
+export async function generateNoteDraft(payload: {
+  noteId: string;
+  pageIds: number[];
+  memo: string;
+  language: "ko" | "en";
+  existingText?: string;
+}): Promise<GeneratedNoteDraft> {
+  const response = await apiFetch("/research-note-documents/ai/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    timeoutMs: AI_GENERATION_TIMEOUT_MS,
+  });
+  if (!response.ok) throw new Error(await readErrorDetail(response, "노트 초안 생성에 실패했습니다"));
+  return response.json();
+}
+
 export async function listResearchNoteDocuments(noteId: string): Promise<ResearchNoteDocumentSummary[]> {
   const response = await apiFetch(`/research-note-documents/notes/${noteId}`);
-  if (!response.ok) throw new Error("Failed to fetch note documents");
+  if (!response.ok) throw new Error("노트 문서 목록을 불러오지 못했습니다");
   return response.json();
 }
 
 export async function getResearchNoteDocument(documentId: string): Promise<ResearchNoteDocument> {
   const response = await apiFetch(`/research-note-documents/${documentId}`);
-  if (!response.ok) throw new Error("Failed to fetch note document");
+  if (!response.ok) throw new Error("노트 문서를 불러오지 못했습니다");
   return response.json();
 }
 
@@ -31,7 +79,7 @@ export async function createResearchNoteDocument(payload: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error("Failed to create note document");
+  if (!response.ok) throw new Error("노트 문서 생성에 실패했습니다");
   return response.json();
 }
 
@@ -50,7 +98,7 @@ export async function updateResearchNoteDocument(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error("Failed to save note document");
+  if (!response.ok) throw new Error("노트 문서 저장에 실패했습니다");
   return response.json();
 }
 
@@ -62,7 +110,7 @@ export async function uploadEditorImage(noteId: string, file: File): Promise<{ u
     method: "POST",
     body: form,
   });
-  if (!response.ok) throw new Error("Failed to upload editor image");
+  if (!response.ok) throw new Error("편집기 이미지 업로드에 실패했습니다");
   return response.json();
 }
 
@@ -98,10 +146,10 @@ async function fetchDownload(
     },
     body: JSON.stringify(body),
   });
-  if (!response.ok) throw new Error("Failed to download note PDF");
+  if (!response.ok) throw new Error("노트 PDF 다운로드에 실패했습니다");
   if (!response.body) {
     const fallbackBlob = await response.blob();
-    if (fallbackBlob.size === 0) throw new Error("Downloaded PDF was empty");
+    if (fallbackBlob.size === 0) throw new Error("다운로드한 PDF가 비어 있습니다");
     onProgress?.({ loaded: fallbackBlob.size, total: fallbackBlob.size, percent: 100 });
     return fallbackBlob;
   }
@@ -126,7 +174,7 @@ async function fetchDownload(
   }
 
   const blob = new Blob(chunks, { type: "application/pdf" });
-  if (blob.size === 0) throw new Error("Downloaded PDF was empty");
+  if (blob.size === 0) throw new Error("다운로드한 PDF가 비어 있습니다");
   onProgress?.({ loaded: blob.size, total: total ?? blob.size, percent: 100 });
   return blob;
 }

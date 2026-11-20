@@ -20,8 +20,20 @@ from app.presentation.routers.document_editor import router as document_editor_r
 from app.presentation.routers.file import router as file_router
 from app.presentation.routers.github_integration import router as github_integration_router
 from app.presentation.routers.health import router as health_router
+from app.presentation.routers.note_format import router as note_format_router
+from app.presentation.routers.search import router as search_router
+from app.presentation.routers.github_account import router as github_account_router
+from app.presentation.routers.github_app import router as github_app_router
+from app.presentation.routers.feedback import router as feedback_router
+from app.presentation.routers.home_stats import router as home_stats_router
+from app.presentation.routers.llm import router as llm_router
+from app.presentation.routers.ai_plans import router as ai_plans_router
+from app.presentation.routers.project_data import router as project_data_router
 from app.presentation.routers.project import router as project_router
+from app.presentation.routers.note_bundle import router as note_bundle_router
 from app.presentation.routers.research_note import router as research_note_router
+from app.presentation.routers.research_note_ai_review import router as research_note_ai_review_router
+from app.presentation.routers.research_note_pdf_split import router as research_note_pdf_split_router
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -50,6 +62,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         Base.metadata.create_all(bind=engine)
         ensure_schema_extensions(engine)
+        from app.domain.research_notes.batch_generation import recover_interrupted_jobs
+        recover_interrupted_jobs()
         app_settings.storage_root_path.mkdir(parents=True, exist_ok=True)
 
         registry = SystemAdminRegistry(Path("app/core/system_admins.json"))
@@ -64,8 +78,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(admin_router)
     app.include_router(directory_router)
     app.include_router(document_editor_router)
+    app.include_router(note_format_router)
+    app.include_router(search_router)
+    app.include_router(github_account_router)
+    app.include_router(github_app_router)
+    app.include_router(feedback_router)
+    app.include_router(home_stats_router)
+    app.include_router(llm_router)
+    app.include_router(ai_plans_router)
+    app.include_router(project_data_router)
     app.include_router(github_integration_router)
     app.include_router(project_router)
+    app.include_router(research_note_pdf_split_router)
+    app.include_router(research_note_ai_review_router)
+    app.include_router(note_bundle_router)
     app.include_router(research_note_router)
     app.include_router(file_router)
     app.mount("/storage", StaticFiles(directory=app_settings.storage_root_path), name="storage")

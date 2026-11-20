@@ -7,6 +7,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.domain.accounts.entities import UserAccount
+from app.domain.github_integrations import change_analysis
+from app.infrastructure.github.client import GitHubApiError, GitHubClient, get_github_client
+from app.domain.note_formats.page_fit import (
+    LINE_HEIGHT,
+    MIN_FONT_SIZE,
+    char_budget,
+    fit_font_size,
+    text_height,
+)
 from app.infrastructure.db.models import (
     CompanyMemberORM,
     CompanyORM,
@@ -41,7 +50,7 @@ class GitHubWebhookVerificationError(Exception):
 def _get_company(db: Session, company_id: int) -> CompanyORM:
     company = db.get(CompanyORM, company_id)
     if company is None:
-        raise ValueError("Company not found")
+        raise ValueError("기관을 찾을 수 없습니다")
     return company
 
 
@@ -67,16 +76,16 @@ def _require_company_access(
 
     member = _get_company_member(db, user_id=current_user.id or 0, company_id=company_id)
     if member is None:
-        raise GitHubIntegrationAccessDeniedError("You are not a member of this company")
+        raise GitHubIntegrationAccessDeniedError("이 기관의 구성원이 아닙니다")
     if manage and not current_user.is_company_owner and member.role != "owner":
-        raise GitHubIntegrationManageDeniedError("Only organization owners can manage GitHub integrations")
+        raise GitHubIntegrationManageDeniedError("GitHub 연동은 기관 관리자만 관리할 수 있습니다")
     return company
 
 
 def _normalize_repo_value(value: str) -> str:
     normalized = value.strip()
     if not normalized:
-        raise ValueError("Repository owner and name are required")
+        raise ValueError("저장소 소유자와 이름을 입력하세요")
     return normalized
 
 
@@ -240,13 +249,13 @@ def _validate_mapping_project(
 ) -> ProjectORM:
     project = db.get(ProjectORM, project_id)
     if project is None or project.company_id != integration.company_id:
-        raise ValueError("Mapped project must belong to the integration company")
+        raise ValueError("매핑할 프로젝트는 연동된 기관 소속이어야 합니다")
     for member_id in [default_author_member_id, default_reviewer_member_id]:
         if member_id is None:
             continue
         member = db.get(CompanyMemberORM, member_id)
         if member is None or member.company_id != integration.company_id:
-            raise ValueError("Default author/reviewer must belong to the integration company")
+            raise ValueError("기본 작성자와 검토자는 연동된 기관 소속이어야 합니다")
     return project
 
 
@@ -406,6 +415,35 @@ def _should_auto_generate(event: GitHubEventORM, mapping: GitHubProjectMappingOR
     return False
 
 
+_executor = None
+
+
+def _dispatch_generation(event_id: int, client: GitHubClient | None) -> None:
+    """Writes the note on a worker thread: GitHub waits only ~10s for a webhook response."""
+    global _executor
+    from concurrent.futures import ThreadPoolExecutor
+
+    if _executor is None:
+        _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="labnote-github-notes")
+    _executor.submit(run_event_generation, event_id, client)
+
+
+def run_event_generation(event_id: int, client: GitHubClient | None = None) -> None:
+    from app.infrastructure.db.session import SessionLocal
+
+    with SessionLocal() as db:
+        try:
+            generate_note_from_github_event(db, event_id, generation_type="automatic", client=client)
+        except Exception as exc:  # noqa: BLE001 - record any failure on the event
+            db.rollback()
+            event = db.get(GitHubEventORM, event_id)
+            if event is not None:
+                event.status = "failed"
+                event.error_message = str(exc)[:500]
+                event.processed_at = datetime.now(timezone.utc)
+                db.commit()
+
+
 def ingest_github_event(
     db: Session,
     *,
@@ -413,6 +451,8 @@ def ingest_github_event(
     delivery_id: str,
     event_type: str,
     payload: dict,
+    client: GitHubClient | None = None,
+    background: bool = True,
 ) -> tuple[GitHubEventORM, str | None]:
     integration = db.get(GitHubRepositoryIntegrationORM, integration_id)
     if integration is None or integration.status != "active":
@@ -455,8 +495,16 @@ def ingest_github_event(
             db.refresh(event)
         return event, None
 
+    if background and ai_explanation_available(db, integration):
+        event.status = "processing"
+        event.error_message = None
+        db.commit()
+        db.refresh(event)
+        _dispatch_generation(event.id, client)
+        return event, None
+
     try:
-        note_id = generate_note_from_github_event(db, event.id, generation_type="automatic")
+        note_id = generate_note_from_github_event(db, event.id, generation_type="automatic", client=client)
         db.refresh(event)
         return event, note_id
     except Exception as exc:
@@ -500,8 +548,21 @@ def list_github_events(
     return list(db.scalars(stmt.order_by(GitHubEventORM.created_at.desc(), GitHubEventORM.id.desc())).all())
 
 
-def get_generated_note_id(db: Session, event_id: int) -> str | None:
+def _live_generated_note(db: Session, event_id: int) -> GitHubGeneratedNoteORM | None:
+    """The note made from this event; a link to a note that was since deleted is dropped so it can be made again."""
     generated = db.scalar(select(GitHubGeneratedNoteORM).where(GitHubGeneratedNoteORM.event_id == event_id))
+    if generated is None:
+        return None
+    note = db.get(ResearchNoteORM, generated.note_id)
+    if note is None or note.is_deleted:
+        db.delete(generated)
+        db.flush()
+        return None
+    return generated
+
+
+def get_generated_note_id(db: Session, event_id: int) -> str | None:
+    generated = _live_generated_note(db, event_id)
     return generated.note_id if generated else None
 
 
@@ -512,7 +573,7 @@ def _resolve_author_reviewer(
 ) -> tuple[int, int | None]:
     project = db.get(ProjectORM, mapping.project_id)
     if project is None:
-        raise ValueError("Mapped project not found")
+        raise ValueError("매핑된 프로젝트를 찾을 수 없습니다")
     author_member_id = mapping.default_author_member_id or project.owner_member_id
     if author_member_id is None:
         member = db.scalar(
@@ -522,9 +583,54 @@ def _resolve_author_reviewer(
         )
         author_member_id = member.id if member else None
     if author_member_id is None:
-        raise ValueError("No default author member is available for this mapping")
+        raise ValueError("이 매핑에 사용할 기본 작성자가 없습니다")
     reviewer_member_id = mapping.default_reviewer_member_id or project.owner_member_id
     return author_member_id, reviewer_member_id
+
+
+def _event_github_logins(event_type: str, payload: dict) -> list[str]:
+    """GitHub logins of the people who did the work, most specific first."""
+    candidates: list[object] = []
+    if event_type == "pull_request":
+        pr = payload.get("pull_request") or {}
+        candidates += [(pr.get("user") or {}).get("login"), (pr.get("merged_by") or {}).get("login")]
+    elif event_type == "push":
+        head = payload.get("head_commit") or {}
+        candidates += [(head.get("author") or {}).get("username"), (head.get("committer") or {}).get("username")]
+        candidates.append((payload.get("pusher") or {}).get("name"))
+    candidates.append((payload.get("sender") or {}).get("login"))
+    logins: list[str] = []
+    for value in candidates:
+        if isinstance(value, str) and value.strip() and value.strip().lower() not in logins:
+            logins.append(value.strip().lower())
+    return logins
+
+
+def _member_for_github_login(db: Session, project: ProjectORM, logins: list[str]) -> int | None:
+    """The project member whose linked GitHub account made the change, if any."""
+    from sqlalchemy import func
+
+    from app.infrastructure.db.models import GitHubUserIdentityORM, ProjectMemberORM
+
+    for login in logins:
+        identity = db.scalar(select(GitHubUserIdentityORM).where(func.lower(GitHubUserIdentityORM.login) == login))
+        if identity is None:
+            continue
+        member = db.scalar(
+            select(CompanyMemberORM).where(
+                CompanyMemberORM.user_id == identity.user_id, CompanyMemberORM.company_id == project.company_id
+            )
+        )
+        if member is None:
+            continue
+        in_project = project.owner_member_id == member.id or db.scalar(
+            select(ProjectMemberORM.id).where(
+                ProjectMemberORM.project_id == project.id, ProjectMemberORM.company_member_id == member.id
+            )
+        )
+        if in_project:
+            return member.id
+    return None
 
 
 def _event_actor_user_id(db: Session, integration: GitHubRepositoryIntegrationORM, author_member_id: int) -> int | None:
@@ -540,6 +646,10 @@ def _build_note_title(event: GitHubEventORM, payload: dict) -> str:
         number = pr.get("number")
         title = pr.get("title") or "Merged pull request"
         return f"[GitHub] PR #{number}: {title}"[:255]
+    if event.event_type == "push" and event.action == "commit":
+        commit = payload.get("head_commit", {})
+        first_line = str(commit.get("message") or "").splitlines()[0] if commit.get("message") else ""
+        return f"[GitHub] 커밋 {str(commit.get('id') or '')[:7]}: {first_line}"[:255]
     if event.event_type == "push":
         branch = _event_branch("push", payload) or "branch"
         message = payload.get("head_commit", {}).get("message") or "Push update"
@@ -549,68 +659,80 @@ def _build_note_title(event: GitHubEventORM, payload: dict) -> str:
 
 
 def _build_note_body(event: GitHubEventORM, payload: dict) -> str:
-    repo = payload.get("repository", {})
-    repo_name = repo.get("full_name") or ""
-    lines = [
-        "GitHub Event Summary",
-        f"- Repository: {repo_name}",
-        f"- Event: {event.event_type}",
-        f"- Action: {event.action or '-'}",
-        f"- Source: {event.source_url or '-'}",
-        "",
-    ]
+    """Plain record of the change. The first block (up to the blank line) is the header kept above an AI explanation."""
+    repo_name = (payload.get("repository") or {}).get("full_name") or "-"
     if event.event_type == "pull_request":
-        pr = payload.get("pull_request", {})
-        user = pr.get("user", {})
-        merged_by = pr.get("merged_by") or {}
-        lines.extend(
-            [
-                f"PR #{pr.get('number')}: {pr.get('title') or ''}",
-                f"- Author: {user.get('login') or '-'}",
-                f"- Merged by: {merged_by.get('login') or '-'}",
-                f"- Base branch: {pr.get('base', {}).get('ref') or '-'}",
-                f"- Head branch: {pr.get('head', {}).get('ref') or '-'}",
-                f"- Commits: {pr.get('commits') or 0}",
-                f"- Changed files: {pr.get('changed_files') or 0}",
-                "",
-                "PR Body",
-                str(pr.get("body") or "-"),
-            ]
-        )
-    elif event.event_type == "push":
+        pr = payload.get("pull_request") or {}
+        lines = [
+            f"- 저장소: {repo_name}",
+            f"- PR: #{pr.get('number')} ({(pr.get('head') or {}).get('ref') or '-'} → {(pr.get('base') or {}).get('ref') or '-'})",
+            f"- 작성자: {(pr.get('user') or {}).get('login') or '-'} · 병합: {(pr.get('merged_by') or {}).get('login') or '-'}",
+            f"- 링크: {event.source_url or '-'}",
+            "",
+            f"커밋 {pr.get('commits') or 0}개 · 변경 파일 {pr.get('changed_files') or 0}개",
+            "",
+            "PR 설명",
+            str(pr.get("body") or "").strip() or "-",
+        ]
+        return "\n".join(lines)
+    if event.event_type == "push":
         commits = payload.get("commits") or []
-        lines.extend(
-            [
-                f"Branch: {_event_branch('push', payload) or '-'}",
-                f"Commit count: {len(commits)}",
+        head = payload.get("head_commit") or {}
+        branch = _event_branch("push", payload) or "-"
+        head_author = head.get("author") or {}
+        author = head_author.get("name") or head_author.get("username") or "-"
+        if event.action == "commit" or len(commits) <= 1:
+            commit = head or (commits[0] if commits else {})
+            lines = [
+                f"- 저장소: {repo_name} ({branch})",
+                f"- 커밋: {str(commit.get('id') or '')[:7]} · 작성자 {author}",
+                f"- 링크: {event.source_url or commit.get('url') or '-'}",
                 "",
-                "Commits",
+                "커밋 메시지",
+                str(commit.get("message") or "").strip() or "-",
             ]
-        )
+            return "\n".join(lines)
+        lines = [
+            f"- 저장소: {repo_name} ({branch})",
+            f"- 커밋 {len(commits)}개 · 마지막 작성자 {author}",
+            f"- 링크: {event.source_url or '-'}",
+            "",
+            "커밋 목록",
+        ]
         for commit in commits[:20]:
-            lines.append(f"- {str(commit.get('id') or '')[:7]} {commit.get('message') or ''}")
-    return "\n".join(lines)
+            first_line = (str(commit.get("message") or "").strip().splitlines() or [""])[0]
+            lines.append(f"- {str(commit.get('id') or '')[:7]} {first_line}")
+        return "\n".join(lines)
+    return "\n".join([f"- 저장소: {repo_name}", f"- 이벤트: {event.event_type}", f"- 링크: {event.source_url or '-'}"])
 
 
-def _text_block(block_id: str, x: int, y: int, w: int, h: int, content: str, font_size: int = 14) -> dict:
-    return {
-        "id": block_id,
-        "type": "text",
-        "x": x,
-        "y": y,
-        "w": w,
-        "h": h,
-        "locked": False,
-        "content": content,
-        "style": {"fontSize": font_size, "fontWeight": "normal", "textAlign": "left"},
-    }
+def _summary_header(summary: str) -> str:
+    return summary.split("\n\n", 1)[0]
 
 
-def _build_document_payload(note: ResearchNoteORM, body: str) -> dict:
+BODY_FONT_SIZE = 12
+
+
+def _body_box(fmt) -> tuple[int, int]:
+    """Width and height of the single text block a GitHub note is written into."""
+    return 726, fmt.content_bottom - fmt.content_top - 12
+
+
+def _build_document_payload(db: Session, note: ResearchNoteORM, body: str) -> dict:
+    """One free text block in the note format's content area; the format's header already shows the title.
+
+    The note is one A4 page, so the font shrinks (12 → 9pt) until the text fits the block.
+    """
+    from app.domain.note_formats.use_cases import get_note_format_for_note
+
+    fmt = get_note_format_for_note(db, note)
+    top, bottom = fmt.content_top, fmt.content_bottom
+    width, height = _body_box(fmt)
+    font_size = fit_font_size(body, width, height, start=BODY_FONT_SIZE) or MIN_FONT_SIZE
     return {
         "schemaVersion": 1,
         "id": f"draft-{note.id}",
-        "title": f"{note.title} Layout",
+        "title": note.title,
         "page": {
             "width": 794,
             "height": 1123,
@@ -623,10 +745,114 @@ def _build_document_payload(note: ResearchNoteORM, body: str) -> dict:
             "sourcePageId": None,
         },
         "blocks": [
-            _text_block("github-title", 34, 34, 720, 42, note.title, font_size=16),
-            _text_block("github-summary", 34, 88, 720, 820, body, font_size=12),
+            {
+                "id": "github-body",
+                "type": "text",
+                "x": 34,
+                "y": top + 6,
+                "w": 726,
+                "h": bottom - top - 12,
+                "locked": False,
+                "content": body,
+                "style": {"fontSize": font_size, "fontWeight": "normal", "textAlign": "left"},
+            }
         ],
     }
+
+
+def build_change_generator(db: Session, company_id: int):
+    """The organization's LLM client, or None when AI is not set up. Replaced in tests."""
+    from app.domain.research_notes.note_generation import NoteGenerationUnavailableError
+    from app.infrastructure.llm.connections import resolve_settings
+    from app.infrastructure.llm.openai_note_generator import OpenAINoteGenerator
+
+    try:
+        settings = resolve_settings(db, company_id)
+    except NoteGenerationUnavailableError:
+        return None
+    if settings is None:
+        return None
+    try:
+        return OpenAINoteGenerator(settings)
+    except ImportError:
+        return None
+
+
+def _company_token(db: Session, company_id: int, client: GitHubClient | None = None) -> str | None:
+    from app.domain.github_integrations.connections import GitHubAccountNotConnectedError, account_token
+
+    try:
+        return account_token(db, company_id, client)
+    except GitHubAccountNotConnectedError:
+        return None
+
+
+def ai_explanation_available(db: Session, integration: GitHubRepositoryIntegrationORM) -> bool:
+    """Whether a note for this integration can explain the diff (GitHub connection + LLM connection)."""
+    from app.domain.github_integrations.connections import account_connected
+
+    if not account_connected(db, integration.company_id):
+        return False
+    generator = build_change_generator(db, integration.company_id)
+    if generator is None:
+        return False
+    close = getattr(generator, "close", None)
+    if callable(close):
+        close()
+    return True
+
+
+def _explain_event(
+    db: Session,
+    integration: GitHubRepositoryIntegrationORM,
+    event: GitHubEventORM,
+    payload: dict,
+    client: GitHubClient | None,
+) -> tuple[str | None, str, str | None]:
+    """(note text, status message, model). Text is None when the AI explanation could not be made."""
+    from app.domain.note_formats.use_cases import get_company_note_format
+    from app.domain.research_notes.note_generation import NoteGenerationFailedError
+
+    if event.event_type not in {"push", "pull_request"}:
+        return None, "코드 변경을 설명할 수 없는 이벤트", None
+    try:
+        token = _company_token(db, integration.company_id, client)
+    except GitHubApiError as exc:
+        return None, f"GitHub 접근 실패: {exc}", None
+    if token is None:
+        return None, "GitHub 계정이 연결되지 않아 코드 변경을 읽지 못함", None
+    generator = build_change_generator(db, integration.company_id)
+    if generator is None:
+        return None, "AI(LLM) 연결이 없어 커밋 정보만 기록함", None
+    try:
+        changes = change_analysis.collect_changes(
+            client or get_github_client(),
+            token,
+            owner=integration.repo_owner,
+            repo=integration.repo_name,
+            event_type=event.event_type,
+            payload=payload,
+        )
+        note_format = get_company_note_format(db, integration.company_id)
+        sections = [(section.title, section.guide) for section in note_format.sections]
+        project = db.get(ProjectORM, event.project_id) if event.project_id else None
+        context = f"{project.name}\n{project.description or ''}" if project else ""
+        appendix = change_analysis.change_appendix(changes)
+        # The AI text shares the page with the header lines and this appendix.
+        width, height = _body_box(note_format)
+        reserved = text_height(appendix, width, BODY_FONT_SIZE) + 6 * BODY_FONT_SIZE * LINE_HEIGHT
+        budget = max(400, char_budget(width, height - reserved, BODY_FONT_SIZE))
+        generated = change_analysis.explain_changes(
+            generator, changes, sections, project_context=context, max_chars=budget
+        )
+    except (GitHubApiError, NoteGenerationFailedError, ValueError) as exc:
+        return None, f"AI 설명 실패: {exc}", None
+    finally:
+        close = getattr(generator, "close", None)
+        if callable(close):
+            close()
+    text = "\n\n".join([generated.as_text(), appendix])
+    return text, f"AI 코드 변경 설명 ({generated.model})", generated.model
 
 
 def generate_note_from_github_event(
@@ -635,40 +861,50 @@ def generate_note_from_github_event(
     *,
     generation_type: str = "manual",
     current_user: UserAccount | None = None,
+    client: GitHubClient | None = None,
 ) -> str:
     event = db.get(GitHubEventORM, event_id)
     if event is None:
         raise GitHubIntegrationNotFoundError(event_id)
 
-    existing = db.scalar(select(GitHubGeneratedNoteORM).where(GitHubGeneratedNoteORM.event_id == event_id))
+    existing = _live_generated_note(db, event_id)
     if existing is not None:
         return existing.note_id
 
     integration = db.get(GitHubRepositoryIntegrationORM, event.integration_id)
     mapping = db.get(GitHubProjectMappingORM, event.project_mapping_id) if event.project_mapping_id else None
     if integration is None or mapping is None:
-        raise ValueError("Event is not mapped to a project")
+        raise ValueError("이 이벤트는 프로젝트에 매핑되지 않았습니다")
     if current_user is not None:
         _require_company_access(db, company_id=integration.company_id, current_user=current_user)
 
     payload = json.loads(event.payload_json)
     author_member_id, reviewer_member_id = _resolve_author_reviewer(db, mapping=mapping)
+    project = db.get(ProjectORM, mapping.project_id)
+    credited_member_id = _member_for_github_login(db, project, _event_github_logins(event.event_type, payload)) if project else None
+    if credited_member_id is not None:
+        author_member_id = credited_member_id
     actor_user_id = current_user.id if current_user and current_user.id else _event_actor_user_id(db, integration, author_member_id)
+    ai_text, generation_message, ai_model = _explain_event(db, integration, event, payload, client)
+    summary = _build_note_body(event, payload)
+    # With an AI explanation, keep only the summary's header: the appendix lists commits and files.
+    content = f"{_summary_header(summary)}\n\n{ai_text}" if ai_text else f"{summary}\n\n※ {generation_message}"
     note = ResearchNoteORM(
         project_id=mapping.project_id,
         title=_build_note_title(event, payload),
-        content=_build_note_body(event, payload),
+        content=content,
         status="draft",
         owner_member_id=author_member_id,
         written_date=date.today(),
         reviewer_member_id=reviewer_member_id,
         reviewed_date=None,
         last_updated_by=actor_user_id,
+        bundle_id=mapping.bundle_id,
     )
     db.add(note)
     db.flush()
 
-    document_payload = _build_document_payload(note, note.content or "")
+    document_payload = _build_document_payload(db, note, note.content or "")
     payload_json = json.dumps(document_payload, ensure_ascii=False)
     document = ResearchNoteDocumentORM(
         note_id=note.id,
@@ -686,12 +922,18 @@ def generate_note_from_github_event(
         revision_no=1,
         payload_json=payload_json,
         created_by=actor_user_id,
-        change_summary="Generated from GitHub event",
+        change_summary=f"Generated from GitHub event; {generation_message}"[:255],
     )
     db.add(revision)
     db.flush()
     document.current_revision_id = revision.id
-    generated = GitHubGeneratedNoteORM(event_id=event.id, note_id=note.id, generation_type=generation_type)
+    generated = GitHubGeneratedNoteORM(
+        event_id=event.id,
+        note_id=note.id,
+        generation_type=generation_type,
+        review_required=ai_text is not None,
+        ai_model=ai_model,
+    )
     db.add(generated)
     event.status = "processed"
     event.processed_at = datetime.now(timezone.utc)

@@ -4,6 +4,7 @@ export type TextStyle = {
   fontSize?: number;
   fontWeight?: "normal" | "bold";
   textAlign?: "left" | "center" | "right";
+  color?: string | null;
 };
 
 export type BaseBlock = {

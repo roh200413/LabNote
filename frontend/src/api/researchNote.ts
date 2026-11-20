@@ -14,6 +14,7 @@ export type ResearchNote = {
   reviewed_date: string | null;
   last_updated_by: number | null;
   is_deleted: boolean;
+  bundle_id?: string | null;
 };
 
 export type ResearchNoteApprovalEvent = {
@@ -52,7 +53,14 @@ async function parseResearchNoteError(response: Response, fallback: string): Pro
 
 export async function listResearchNotes(projectId: string): Promise<ResearchNote[]> {
   const response = await apiFetch(`/research-notes?project_id=${projectId}`);
-  if (!response.ok) throw new Error(await parseResearchNoteError(response, "Failed to fetch research notes"));
+  if (!response.ok) throw new Error(await parseResearchNoteError(response, "연구노트를 불러오지 못했습니다"));
+  return response.json();
+}
+
+/** Every note the user can see, across all of their projects (home screen to-dos). */
+export async function listAllResearchNotes(): Promise<ResearchNote[]> {
+  const response = await apiFetch("/research-notes");
+  if (!response.ok) throw new Error(await parseResearchNoteError(response, "연구노트를 불러오지 못했습니다"));
   return response.json();
 }
 
@@ -64,13 +72,13 @@ export async function createResearchNote(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error(await parseResearchNoteError(response, "Failed to create research note"));
+  if (!response.ok) throw new Error(await parseResearchNoteError(response, "연구노트 생성에 실패했습니다"));
   return response.json();
 }
 
 export async function getResearchNote(noteId: string): Promise<ResearchNote> {
   const response = await apiFetch(`/research-notes/${noteId}`);
-  if (!response.ok) throw new Error(await parseResearchNoteError(response, "Failed to fetch research note detail"));
+  if (!response.ok) throw new Error(await parseResearchNoteError(response, "연구노트 상세를 불러오지 못했습니다"));
   return response.json();
 }
 
@@ -91,7 +99,7 @@ export async function updateResearchNote(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error(await parseResearchNoteError(response, "Failed to update research note"));
+  if (!response.ok) throw new Error(await parseResearchNoteError(response, "연구노트 수정에 실패했습니다"));
   return response.json();
 }
 
@@ -107,7 +115,7 @@ export async function assignResearchNoteMembers(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error(await parseResearchNoteError(response, "Failed to assign research note members"));
+  if (!response.ok) throw new Error(await parseResearchNoteError(response, "연구노트 담당자 지정에 실패했습니다"));
   return response.json();
 }
 
@@ -115,7 +123,7 @@ export async function deleteResearchNote(noteId: string): Promise<void> {
   const response = await apiFetch(`/research-notes/${noteId}`, {
     method: "DELETE",
   });
-  if (!response.ok) throw new Error(await parseResearchNoteError(response, "Failed to delete research note"));
+  if (!response.ok) throw new Error(await parseResearchNoteError(response, "연구노트 삭제에 실패했습니다"));
 }
 
 async function postApprovalAction(noteId: string, action: string, comment?: string): Promise<ResearchNoteApprovalEvent> {
@@ -124,7 +132,7 @@ async function postApprovalAction(noteId: string, action: string, comment?: stri
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ comment: comment ?? null }),
   });
-  if (!response.ok) throw new Error(await parseResearchNoteError(response, `Failed to ${action} research note`));
+  if (!response.ok) throw new Error(await parseResearchNoteError(response, `연구노트 ${({ submit: "제출", approve: "승인", reject: "반려", reopen: "재개" } as Record<string, string>)[action] ?? action} 처리에 실패했습니다`));
   return response.json();
 }
 
@@ -146,6 +154,30 @@ export function reopenResearchNote(noteId: string, comment: string): Promise<Res
 
 export async function listResearchNoteApprovalEvents(noteId: string): Promise<ResearchNoteApprovalEvent[]> {
   const response = await apiFetch(`/research-notes/${noteId}/approval-events`);
-  if (!response.ok) throw new Error(await parseResearchNoteError(response, "Failed to fetch approval events"));
+  if (!response.ok) throw new Error(await parseResearchNoteError(response, "결재 이력을 불러오지 못했습니다"));
+  return response.json();
+}
+
+export async function splitPdfIntoNotes(payload: {
+  projectId: string;
+  file: File;
+  pagesPerNote: number;
+  title: string;
+  ownerMemberId: number;
+  reviewerMemberId?: number | null;
+  writtenDate?: string;
+  reviewedDate?: string;
+}): Promise<{ notes: Array<{ id: string; title: string; first_page: number; last_page: number }> }> {
+  const form = new FormData();
+  form.append("project_id", payload.projectId);
+  form.append("title", payload.title);
+  form.append("pages_per_note", String(payload.pagesPerNote));
+  form.append("owner_member_id", String(payload.ownerMemberId));
+  if (payload.reviewerMemberId) form.append("reviewer_member_id", String(payload.reviewerMemberId));
+  if (payload.writtenDate) form.append("written_date", payload.writtenDate);
+  if (payload.reviewedDate) form.append("reviewed_date", payload.reviewedDate);
+  form.append("upload", payload.file);
+  const response = await apiFetch("/research-notes/from-pdf", { method: "POST", body: form, timeoutMs: 180000 } as RequestInit);
+  if (!response.ok) throw new Error(await parseResearchNoteError(response, "PDF를 여러 노트로 나누지 못했습니다"));
   return response.json();
 }

@@ -70,17 +70,17 @@ def _ensure_source_belongs_to_note(
     if source_file_id is not None:
         source_file = db.get(ResearchNoteFileORM, source_file_id)
         if source_file is None or source_file.note_id != note_id:
-            raise ValueError("Source file not found")
+            raise ValueError("원본 파일을 찾을 수 없습니다")
     if source_page_id is not None:
         source_page = db.get(ResearchNotePageORM, source_page_id)
         if source_page is None:
-            raise ValueError("Source page not found")
+            raise ValueError("원본 페이지를 찾을 수 없습니다")
         if source_page.note_id and source_page.note_id != note_id:
-            raise ValueError("Source page does not belong to this note")
+            raise ValueError("이 노트의 페이지가 아닙니다")
         if not source_page.note_id:
             source_file = db.get(ResearchNoteFileORM, source_page.file_id)
             if source_file is None or source_file.note_id != note_id:
-                raise ValueError("Source page does not belong to this note")
+                raise ValueError("이 노트의 페이지가 아닙니다")
 
 
 def list_note_documents(
@@ -128,9 +128,9 @@ def save_note_document(
     can_manage = _can_manage_note(current_user, project, company_member)
     is_author = company_member is not None and company_member.id == note.owner_member_id
     if note.status not in EDITABLE_NOTE_STATUSES:
-        raise ResearchNoteStateError("Only draft, rejected, or reopened notes can be edited")
+        raise ResearchNoteStateError("초안, 반려, 재개 상태의 노트만 편집할 수 있습니다")
     if not can_manage and not is_author:
-        raise ResearchNoteManageDeniedError("Only the author, project lead, or company owner can edit this document")
+        raise ResearchNoteManageDeniedError("작성자, 프로젝트 책임자, 기관 관리자만 이 문서를 편집할 수 있습니다")
 
     _ensure_source_belongs_to_note(
         db,
@@ -145,9 +145,9 @@ def save_note_document(
         if document is None:
             raise ResearchNoteDocumentNotFoundError(document_id)
         if document.note_id != note_id:
-            raise ValueError("Document does not belong to this note")
+            raise ValueError("이 노트의 문서가 아닙니다")
         if document.status in {"submitted", "approved", "locked"}:
-            raise ResearchNoteStateError("Submitted or approved documents cannot be edited")
+            raise ResearchNoteStateError("제출되었거나 승인된 문서는 편집할 수 없습니다")
         payload_with_id["id"] = document.id
         payload_json = json.dumps(payload_with_id, ensure_ascii=False)
         document.title = title
@@ -207,9 +207,9 @@ def upload_editor_image(
     can_manage = _can_manage_note(current_user, project, company_member)
     is_author = company_member is not None and company_member.id == note.owner_member_id
     if note.status not in EDITABLE_NOTE_STATUSES:
-        raise ResearchNoteStateError("Only draft, rejected, or reopened notes can receive editor images")
+        raise ResearchNoteStateError("초안, 반려, 재개 상태의 노트에만 이미지를 넣을 수 있습니다")
     if not can_manage and not is_author:
-        raise ResearchNoteManageDeniedError("Only the author, project lead, or company owner can upload editor images")
+        raise ResearchNoteManageDeniedError("작성자, 프로젝트 책임자, 기관 관리자만 이미지를 올릴 수 있습니다")
     storage = LocalStorageService()
     storage_key = storage.save_bytes(file_bytes, f"notes/{note_id}/editor", filename)
     return storage_key, filename

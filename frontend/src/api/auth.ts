@@ -76,7 +76,7 @@ export async function signUp(payload: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error(await parseErrorMessage(response, "Failed to sign up"));
+  if (!response.ok) throw new Error(await parseErrorMessage(response, "회원가입에 실패했습니다"));
   const data = (await response.json()) as AuthResponse;
   setAccessToken(data.access_token);
   return data;
@@ -88,7 +88,7 @@ export async function login(payload: { email: string; password: string }): Promi
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error(await parseErrorMessage(response, "Failed to log in"));
+  if (!response.ok) throw new Error(await parseErrorMessage(response, "로그인에 실패했습니다"));
   const data = (await response.json()) as AuthResponse;
   setAccessToken(data.access_token);
   return data;
@@ -97,7 +97,7 @@ export async function login(payload: { email: string; password: string }): Promi
 export async function getMe(): Promise<AuthUser> {
   const response = await apiFetch("/auth/me");
   if (response.status === 401) throw new Error("UNAUTHORIZED");
-  if (!response.ok) throw new Error(await parseErrorMessage(response, "Failed to load current user"));
+  if (!response.ok) throw new Error(await parseErrorMessage(response, "사용자 정보를 불러오지 못했습니다"));
   return response.json();
 }
 
@@ -107,13 +107,13 @@ export async function updateMySignature(signature_data_url: string | null): Prom
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ signature_data_url }),
   });
-  if (!response.ok) throw new Error(await parseErrorMessage(response, "Failed to update signature"));
+  if (!response.ok) throw new Error(await parseErrorMessage(response, "서명 수정에 실패했습니다"));
   return response.json();
 }
 
 export async function listMySignatures(): Promise<UserSignature[]> {
   const response = await apiFetch("/auth/me/signatures");
-  if (!response.ok) throw new Error(await parseErrorMessage(response, "Failed to load signatures"));
+  if (!response.ok) throw new Error(await parseErrorMessage(response, "서명을 불러오지 못했습니다"));
   return response.json();
 }
 
@@ -124,7 +124,7 @@ export async function createMySignature(file: File): Promise<UserSignature> {
     method: "POST",
     body: form,
   });
-  if (!response.ok) throw new Error(await parseErrorMessage(response, "Failed to upload signature"));
+  if (!response.ok) throw new Error(await parseErrorMessage(response, "서명 업로드에 실패했습니다"));
   return response.json();
 }
 
@@ -132,12 +132,12 @@ export async function revokeMySignature(signatureId: number): Promise<void> {
   const response = await apiFetch(`/auth/me/signatures/${signatureId}`, {
     method: "DELETE",
   });
-  if (!response.ok) throw new Error(await parseErrorMessage(response, "Failed to remove signature"));
+  if (!response.ok) throw new Error(await parseErrorMessage(response, "서명 삭제에 실패했습니다"));
 }
 
 export async function getMyCompanyAccessRequest(): Promise<CompanyAccessRequestResponse> {
   const response = await apiFetch("/auth/me/company-access-request");
-  if (!response.ok) throw new Error(await parseErrorMessage(response, "Failed to load company access request"));
+  if (!response.ok) throw new Error(await parseErrorMessage(response, "기관 가입 요청을 불러오지 못했습니다"));
   return response.json();
 }
 
@@ -150,6 +150,15 @@ export async function requestMyCompanyAccess(payload: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error(await parseErrorMessage(response, "Failed to request company access"));
+  if (!response.ok) throw new Error(await parseErrorMessage(response, "기관 가입 요청에 실패했습니다"));
   return response.json();
+}
+
+export async function changeMyPassword(currentPassword: string, newPassword: string): Promise<void> {
+  const response = await apiFetch("/auth/me/password", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  });
+  if (!response.ok) throw new Error(await parseErrorMessage(response, "비밀번호 변경에 실패했습니다"));
 }

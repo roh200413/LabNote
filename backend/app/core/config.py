@@ -34,6 +34,32 @@ class Settings(BaseSettings):
     pdf_render_zoom: float = 2.0
     thumbnail_max_width: int = 320
 
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4.1-mini"
+    openai_base_url: str | None = None
+    llm_timeout_seconds: float = 120.0
+    llm_max_pages: int = 4
+    llm_image_max_side: int = 1600
+    llm_encryption_key: str = ""
+    llm_json_mode: bool = True
+    llm_batch_max_items: int = 100
+
+    github_api_base_url: str = "https://api.github.com"
+    github_timeout_seconds: float = 15.0
+    # Public URL of this API (e.g. https://labnote.example.com/api). GitHub must reach it to deliver
+    # webhooks; when empty the request's own base URL is used, which only works if it is public.
+    public_api_base_url: str = ""
+    # GitHub web host for the App install page and user sign-in (GitHub Enterprise: https://ghe.example.com).
+    github_web_base_url: str = "https://github.com"
+    # GitHub App (recommended connection). Register an App on GitHub and copy its values here.
+    github_app_id: str = ""
+    github_app_slug: str = ""  # the name in https://github.com/apps/<slug>
+    github_app_private_key: str = ""  # PEM text ("\n" escapes allowed)
+    github_app_private_key_path: str = ""  # or a path to the downloaded .pem file
+    github_app_webhook_secret: str = ""
+    github_app_client_id: str = ""  # for "GitHub로 로그인" (linking each user's GitHub account)
+    github_app_client_secret: str = ""
+
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",

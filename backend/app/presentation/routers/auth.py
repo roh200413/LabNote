@@ -5,6 +5,7 @@ from app.domain.accounts.use_cases import (
     InvalidCredentialsError,
     PendingApprovalError,
     UserAlreadyExistsError,
+    change_user_password,
     get_company_access_request_status,
     get_user_by_id,
     create_user_signature,
@@ -22,6 +23,7 @@ from app.presentation.schemas.auth import (
     CompanyAccessRequestPayload,
     CompanyAccessRequestResponse,
     LoginRequest,
+    PasswordChangeRequest,
     SignUpRequest,
     SignatureUpdateRequest,
     UserSignatureResponse,
@@ -54,7 +56,7 @@ def signup_endpoint(payload: SignUpRequest, db: Session = Depends(get_db)):
     try:
         user, access_token, message = register_user(db, **payload.model_dump())
     except UserAlreadyExistsError as exc:
-        raise HTTPException(status_code=409, detail="User already exists") from exc
+        raise HTTPException(status_code=409, detail="이미 가입된 사용자입니다") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return AuthResponse(access_token=access_token, user=_build_user_response(user, db), message=message)
@@ -65,9 +67,9 @@ def login_endpoint(payload: LoginRequest, db: Session = Depends(get_db)):
     try:
         user, access_token = login_user(db, payload.email, payload.password)
     except InvalidCredentialsError as exc:
-        raise HTTPException(status_code=401, detail="Invalid email or password") from exc
+        raise HTTPException(status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다") from exc
     except PendingApprovalError as exc:
-        raise HTTPException(status_code=403, detail="Account is waiting for admin approval") from exc
+        raise HTTPException(status_code=403, detail="관리자 승인을 기다리는 계정입니다") from exc
     return AuthResponse(access_token=access_token, user=_build_user_response(user, db))
 
 
@@ -77,13 +79,32 @@ def me_endpoint(current_user=Depends(get_current_user), db: Session = Depends(ge
     return _build_user_response(refreshed, db)
 
 
+@router.put("/me/password", status_code=status.HTTP_204_NO_CONTENT)
+def change_password_endpoint(
+    payload: PasswordChangeRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        change_user_password(
+            db, current_user.id, current_password=payload.current_password, new_password=payload.new_password
+        )
+    except InvalidCredentialsError as exc:
+        raise HTTPException(status_code=400, detail="현재 비밀번호가 맞지 않습니다") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.put("/me/signature", response_model=UserResponse)
 def update_signature_endpoint(
     payload: SignatureUpdateRequest,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    updated = update_user_signature(db, current_user.id, payload.signature_data_url)
+    try:
+        updated = update_user_signature(db, current_user.id, payload.signature_data_url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _build_user_response(updated, db)
 
 
@@ -99,17 +120,20 @@ async def create_my_signature_endpoint(
     db: Session = Depends(get_db),
 ):
     if not (upload.content_type or "").startswith("image/"):
-        raise HTTPException(status_code=400, detail="Signature upload must be an image")
+        raise HTTPException(status_code=400, detail="서명은 이미지 파일만 올릴 수 있습니다")
     file_bytes = await upload.read()
     if not file_bytes:
-        raise HTTPException(status_code=400, detail="Signature image is empty")
-    return create_user_signature(
-        db,
-        user_id=current_user.id,
-        filename=upload.filename or "signature.png",
-        file_bytes=file_bytes,
-        mime_type=upload.content_type,
-    )
+        raise HTTPException(status_code=400, detail="서명 이미지가 비어 있습니다")
+    try:
+        return create_user_signature(
+            db,
+            user_id=current_user.id,
+            filename=upload.filename or "signature.png",
+            file_bytes=file_bytes,
+            mime_type=upload.content_type,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.delete("/me/signatures/{signature_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -121,7 +145,7 @@ def revoke_my_signature_endpoint(
     try:
         revoke_user_signature(db, user_id=current_user.id, signature_id=signature_id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail="Signature not found") from exc
+        raise HTTPException(status_code=404, detail="서명을 찾을 수 없습니다") from exc
     return None
 
 

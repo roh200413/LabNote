@@ -42,7 +42,7 @@ async def upload_file_endpoint(
         )
         return FileUploadResponse(file=result.note_file, pages=result.pages)
     except ResearchNoteNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Research note not found") from exc
+        raise HTTPException(status_code=404, detail="연구노트를 찾을 수 없습니다") from exc
     except (ResearchNoteAccessDeniedError, ResearchNoteManageDeniedError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ResearchNoteStateError as exc:
@@ -50,7 +50,7 @@ async def upload_file_endpoint(
     except FileUploadLimitError as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
     except UnsupportedFileTypeError as exc:
-        raise HTTPException(status_code=400, detail=f"Unsupported file type: {exc}") from exc
+        raise HTTPException(status_code=400, detail=f"지원하지 않는 파일 형식입니다: {exc}") from exc
 
 
 @router.get("/notes/{note_id}", response_model=list[ResearchNoteFileResponse])
@@ -62,7 +62,7 @@ def list_note_files_endpoint(
     try:
         return list_note_files(db, note_id, current_user)
     except ResearchNoteNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Research note not found") from exc
+        raise HTTPException(status_code=404, detail="연구노트를 찾을 수 없습니다") from exc
     except ResearchNoteAccessDeniedError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -76,7 +76,7 @@ def list_note_pages_for_note_endpoint(
     try:
         return list_pages_for_note(db, note_id, current_user)
     except ResearchNoteNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Research note not found") from exc
+        raise HTTPException(status_code=404, detail="연구노트를 찾을 수 없습니다") from exc
     except ResearchNoteAccessDeniedError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -90,7 +90,7 @@ def list_note_pages_endpoint(
     try:
         return list_note_pages(db, file_id, current_user)
     except ResearchNoteNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Research note not found") from exc
+        raise HTTPException(status_code=404, detail="연구노트를 찾을 수 없습니다") from exc
     except ResearchNoteAccessDeniedError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -115,7 +115,7 @@ async def replace_note_page_asset_endpoint(
             change_reason=change_reason,
         )
     except ResearchNoteNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Research note page not found") from exc
+        raise HTTPException(status_code=404, detail="연구노트 페이지를 찾을 수 없습니다") from exc
     except (ResearchNoteAccessDeniedError, ResearchNoteManageDeniedError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ResearchNoteStateError as exc:
@@ -123,4 +123,4 @@ async def replace_note_page_asset_endpoint(
     except FileUploadLimitError as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
     except UnsupportedFileTypeError as exc:
-        raise HTTPException(status_code=400, detail=f"Unsupported file type: {exc}") from exc
+        raise HTTPException(status_code=400, detail=f"지원하지 않는 파일 형식입니다: {exc}") from exc

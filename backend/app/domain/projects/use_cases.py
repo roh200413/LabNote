@@ -99,17 +99,17 @@ def _require_project(
 
     company_member = _get_company_member(db, user_id=current_user.id or 0, company_id=project.company_id)
     if company_member is None:
-        raise ProjectAccessDeniedError("You are not a member of this company")
+        raise ProjectAccessDeniedError("이 기관의 구성원이 아닙니다")
 
     if current_user.is_company_owner:
         return project, company_member
 
     project_member = _get_project_member(db, project_id=project_id, company_member_id=company_member.id)
     if project_member is None:
-        raise ProjectAccessDeniedError("Only participating researchers can open this project")
+        raise ProjectAccessDeniedError("참여 연구원만 이 프로젝트를 열 수 있습니다")
 
     if manage and project.owner_member_id != company_member.id:
-        raise ProjectManageDeniedError("Only the project lead or company owner can manage project researchers")
+        raise ProjectManageDeniedError("프로젝트 연구원은 프로젝트 책임자나 기관 관리자만 관리할 수 있습니다")
 
     return project, company_member
 
@@ -119,14 +119,14 @@ def create_project(db: Session, current_user: UserAccount, **kwargs) -> ProjectO
     if not current_user.is_system_admin:
         company_member = _get_company_member(db, user_id=current_user.id or 0, company_id=company_id)
         if company_member is None:
-            raise ProjectAccessDeniedError("You are not a member of this company")
+            raise ProjectAccessDeniedError("이 기관의 구성원이 아닙니다")
         if not current_user.is_company_owner:
-            raise ProjectManageDeniedError("Only the company owner can create projects")
+            raise ProjectManageDeniedError("프로젝트는 기관 관리자만 만들 수 있습니다")
     owner_member_id = kwargs.get("owner_member_id")
     if owner_member_id is not None:
         owner_member = db.get(CompanyMemberORM, owner_member_id)
         if owner_member is None or owner_member.company_id != company_id:
-            raise ValueError("Lead member must belong to this company")
+            raise ValueError("책임 연구원은 이 기관 소속이어야 합니다")
 
     project = ProjectORM(**kwargs)
     db.add(project)
@@ -177,7 +177,7 @@ def update_project(db: Session, project_id: str, current_user: UserAccount, **kw
     if owner_member_id is not None:
         owner_member = db.get(CompanyMemberORM, owner_member_id)
         if owner_member is None or owner_member.company_id != project.company_id:
-            raise ValueError("Lead member must belong to this company")
+            raise ValueError("책임 연구원은 이 기관 소속이어야 합니다")
     for key, value in kwargs.items():
         setattr(project, key, value)
     _ensure_project_lead_membership(db, project_id=project.id, owner_member_id=project.owner_member_id)
@@ -202,7 +202,7 @@ def assign_project_member(
     project, _ = _require_project(db, project_id=project_id, current_user=current_user, manage=True)
     company_member = db.get(CompanyMemberORM, company_member_id)
     if company_member is None or company_member.company_id != project.company_id:
-        raise ValueError("Selected researcher is not a member of this company")
+        raise ValueError("선택한 연구원은 이 기관 소속이 아닙니다")
 
     stmt = select(ProjectMemberORM).where(
         ProjectMemberORM.project_id == project_id,
@@ -256,7 +256,7 @@ def list_project_members(db: Session, project_id: str, current_user: UserAccount
 def remove_project_member(db: Session, project_id: str, company_member_id: int, current_user: UserAccount) -> bool:
     project, _ = _require_project(db, project_id=project_id, current_user=current_user, manage=True)
     if project.owner_member_id == company_member_id:
-        raise ProjectManageDeniedError("Remove the project lead from the dashboard only after changing the lead")
+        raise ProjectManageDeniedError("책임자를 먼저 바꾼 뒤에 프로젝트에서 제외하세요")
     stmt = select(ProjectMemberORM).where(
         ProjectMemberORM.project_id == project_id,
         ProjectMemberORM.company_member_id == company_member_id,

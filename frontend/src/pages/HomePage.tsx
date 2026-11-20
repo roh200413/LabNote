@@ -11,7 +11,6 @@ import {
   updateMySignature,
 } from "../api/auth";
 import {
-  createResearcherInvitation,
   getResearcherManagement,
   listCompanyMembers,
   removeResearcherMember,
@@ -38,6 +37,7 @@ import {
   deleteResearchNote,
   getResearchNote,
   listResearchNoteApprovalEvents,
+  listAllResearchNotes,
   listResearchNotes,
   rejectResearchNote,
   reopenResearchNote,
@@ -49,33 +49,55 @@ import {
 import {
   createResearchNoteDocument,
   downloadSelectedResearchNotesPdf,
+  getNoteGenerationStatus,
   getResearchNoteDocument,
   listResearchNoteDocuments,
   updateResearchNoteDocument,
+  type NoteGenerationStatus,
 } from "../api/documentEditor";
 import { DocumentEditor } from "../components/DocumentEditor";
+import { NoteFormatSettings } from "../components/NoteFormatSettings";
+import { LlmConnectionSettings } from "../components/LlmConnectionSettings";
+import { BatchNoteGenerator } from "../components/BatchNoteGenerator";
+import { ResearcherRegistration } from "../components/ResearcherRegistration";
+import { PasswordChangeCard } from "../components/PasswordChangeCard";
+import { GitHubAccountSettings, hasGitHubCallback } from "../components/GitHubAccountSettings";
+import { buildPath, currentPath, parseRoute, writePath, type AppRoute } from "../lib/routes";
+import { ProjectGitHubPanel } from "../components/ProjectGitHubPanel";
+import { ProjectAiGenerator } from "../components/ProjectAiGenerator";
+import { BulkUploadEditor } from "../components/BulkUploadEditor";
+import { NoteCreatePage } from "../components/NoteCreatePage";
+import { HomeQuickStart, HomeStats } from "../components/HomeDashboard";
+import { AiReviewBanner, type AiReviewState } from "../components/AiReviewBanner";
+import { collectDroppedItems, hasFolders, itemsFromFileList, type UploadItem } from "../lib/folderUpload";
+import { CoverTemplateSettings } from "../components/CoverTemplateSettings";
+import { NoteActivityPanel } from "../components/NoteActivityPanel";
+import { DataStorage } from "../components/DataStorage";
+import { ImageLab } from "../components/ImageLab";
+import { SidebarUploadButton } from "../components/SidebarUploadButton";
+import { ALL_BUNDLES, NoteBundleBar, filterNotesByBundle, type BundleFilter } from "../components/NoteBundleBar";
+import { listNoteBundles, moveNotesToBundle, type NoteBundle } from "../api/noteBundle";
+import type { SearchNavigation } from "../api/search";
+import { deleteNoteFormat, getNoteFormat, saveNoteFormat, type NoteFormatInfo } from "../api/noteFormat";
+import {
+  DEFAULT_NOTE_FORMAT,
+  buildPageTemplateSvg,
+  buildSectionBlocks,
+  formatImageRect,
+  formatTemplateBlockIds,
+  type NoteFormat,
+} from "../lib/noteFormat";
 import { getBackendAssetUrl } from "../api/client";
 import {
-  createGitHubIntegration,
-  createGitHubProjectMapping,
-  deleteGitHubIntegration,
-  deleteGitHubProjectMapping,
-  generateResearchNoteFromGitHubEvent,
-  listGitHubEvents,
   listGitHubIntegrations,
   listGitHubProjectMappings,
-  rotateGitHubWebhookSecret,
-  updateGitHubIntegration,
-  updateGitHubProjectMapping,
-  type GitHubEvent,
   type GitHubProjectMapping,
-  type GitHubRepositoryIntegration,
 } from "../api/githubIntegration";
 import type { DocumentSchema, ResearchNoteDocument, ResearchNoteDocumentSummary, TextBlock, ImageBlock } from "../types/document";
 import coverLayoutData from "../../../shared/cover_layout.json";
 
-type UserSection = "home" | "projects" | "researchers" | "github" | "platforms" | "profile";
-type ProjectWorkspaceView = "dashboard" | "members" | "notes" | "cover";
+type UserSection = "home" | "projects" | "researchers" | "format" | "github" | "platforms" | "profile";
+type ProjectWorkspaceView = "dashboard" | "members" | "notes" | "data" | "imaging" | "ai" | "github" | "cover";
 type SidebarIconName = UserSection | ProjectWorkspaceView;
 type CoverTemplate = {
   organization: string;
@@ -88,13 +110,23 @@ type CoverTemplate = {
   overrideOrganization: boolean;
   overrideProjectTitle: boolean;
   overridePrincipalInvestigator: boolean;
+  overrideProjectCode: boolean;
+  overrideProjectPeriod: boolean;
   showOrganization: boolean;
   showProjectTitle: boolean;
   showCoverTitle: boolean;
   showCode: boolean;
   showPrincipalInvestigator: boolean;
   showProjectPeriod: boolean;
+  /** Small label above the title; its text is `coverTitle`. */
+  showTopLabel: boolean;
+  /** Line at the bottom of the cover; its text is `footerNote`. */
+  showFooter: boolean;
 };
+
+const DEFAULT_COVER_FOOTER = "연구 기록은 등록된 과제 정보에 따라 관리됩니다.";
+// Saved before the footer was editable; it was never printed, so treat it as "use the default".
+const LEGACY_COVER_FOOTER = "이 표지 템플릿은 연구노트 묶음에 사용됩니다.";
 
 const COVER_LAYOUT = coverLayoutData as {
   page_width: number;
@@ -110,34 +142,89 @@ type Props = {
   currentUser: AuthUser;
   onCurrentUserChange: (user: AuthUser) => void;
   openProfileToken: number;
+  searchRequest?: { token: number; target: SearchNavigation } | null;
 };
 
 const sectionMeta: Array<{ id: UserSection; title: string; description: string }> = [
-  { id: "home", title: "Home", description: "Check workspace status and move into each management area." },
-  { id: "projects", title: "Project Management", description: "Manage company projects and open project workspaces." },
-  { id: "researchers", title: "Researcher Management", description: "Manage researcher accounts and participation status." },
-  { id: "github", title: "GitHub Integration", description: "Connect repositories and collaboration flows." },
-  { id: "platforms", title: "Platform Integration", description: "Manage external platform and storage connections." },
+  { id: "home", title: "홈", description: "작업 공간 현황을 확인하고 각 관리 화면으로 이동합니다." },
+  { id: "projects", title: "프로젝트 관리", description: "기관 프로젝트를 관리하고 프로젝트 작업 공간을 엽니다." },
+  { id: "researchers", title: "연구원 관리", description: "연구원 계정과 참여 현황을 관리합니다." },
+  { id: "format", title: "노트 포맷", description: "기관 전체 연구노트의 구성을 정합니다." },
+  { id: "github", title: "GitHub 연동", description: "기관 GitHub 계정을 연결합니다. 저장소는 각 프로젝트의 GitHub 탭에서 연결합니다." },
+  { id: "platforms", title: "플랫폼 연동", description: "외부 플랫폼과 저장소 연결을 관리합니다." },
 ];
 
 const projectViewMeta: Record<ProjectWorkspaceView, { title: string; description: string }> = {
   dashboard: {
-    title: "Project Dashboard",
-    description: "Overview, dates, lead member, and project status.",
+    title: "프로젝트 대시보드",
+    description: "개요, 기간, 책임자, 프로젝트 상태를 확인합니다.",
   },
   members: {
-    title: "Researcher Management",
-    description: "Assign and manage project-only participant members.",
+    title: "연구원 관리",
+    description: "이 프로젝트에만 참여하는 연구원을 배정하고 관리합니다.",
   },
   notes: {
-    title: "Research Note",
-    description: "Open note viewer, upload files, and download note packages.",
+    title: "연구노트",
+    description: "노트를 보고, 파일을 올리고, 노트 묶음을 내려받습니다.",
+  },
+  data: {
+    title: "데이터 보관함",
+    description: "실험 원본 데이터를 형식 상관없이 올려 두고, 나중에 골라서 연구노트로 만들거나 AI에게 보냅니다.",
+  },
+  imaging: {
+    title: "이미지 처리",
+    description: "연구노트에 넣을 이미지를 자르고, 조정하고, 측정합니다. (준비 중)",
+  },
+  ai: {
+    title: "AI 생성",
+    description: "기존 노트나 새 문서를 근거로, AI와 장수를 정한 뒤 연구노트 초안을 여러 장 만듭니다.",
+  },
+  github: {
+    title: "GitHub",
+    description: "이 프로젝트에 GitHub 저장소를 연결하고, 커밋·PR로 연구노트를 만듭니다.",
   },
   cover: {
-    title: "Cover Template",
-    description: "Manage the saved research note cover used in package exports.",
+    title: "표지 템플릿",
+    description: "묶음 내보내기에 쓰는 연구노트 표지를 관리합니다.",
   },
 };
+
+// Inside the footer "서명" cells (x 250-510; rows 955-1026 / 1026-1098), below the label.
+// Mirrored in backend document_editor.py SIGNATURE_RECTS.
+const SIGNATURE_RECTS = {
+  author: { x: 256, y: 975, w: 248, h: 47 },
+  reviewer: { x: 256, y: 1046, w: 248, h: 48 },
+};
+
+const SIDEBAR_COLLAPSED_KEY = "labnote.sidebarCollapsed";
+
+function readSidebarCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function SidebarToggle({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
+  const label = collapsed ? "사이드바 펼치기" : "사이드바 접기";
+  return (
+    <button
+      type="button"
+      className="sidebar-toggle"
+      onClick={onToggle}
+      title={`${label} (Ctrl+\\)`}
+      aria-label={label}
+      aria-expanded={!collapsed}
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <rect x="3" y="4" width="18" height="16" rx="2" />
+        <path d="M9 4v16" />
+        <path d={collapsed ? "m13 10 2 2-2 2" : "m16 10-2 2 2 2"} />
+      </svg>
+    </button>
+  );
+}
 
 function SidebarIcon({ name }: { name: SidebarIconName }) {
   const commonProps = {
@@ -187,6 +274,15 @@ function SidebarIcon({ name }: { name: SidebarIconName }) {
           <path d="M15 22v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 19 4.77 5.07 5.07 0 0 0 18.91 1S17.73.65 15 2.48a13.38 13.38 0 0 0-7 0C5.27.65 4.09 1 4.09 1A5.07 5.07 0 0 0 4 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 8 18.13V22" />
         </svg>
       );
+    case "format":
+      return (
+        <svg {...commonProps}>
+          <rect x="5" y="3" width="14" height="18" rx="2" />
+          <path d="M9 7h6" />
+          <path d="M9 11h6" />
+          <path d="M9 15h3" />
+        </svg>
+      );
     case "platforms":
       return (
         <svg {...commonProps}>
@@ -195,6 +291,29 @@ function SidebarIcon({ name }: { name: SidebarIconName }) {
           <path d="M12 18v4" />
           <path d="M8 9h8" />
           <path d="M8 13h5" />
+        </svg>
+      );
+    case "data":
+      return (
+        <svg {...commonProps}>
+          <ellipse cx="12" cy="5" rx="8" ry="3" />
+          <path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5" />
+          <path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6" />
+        </svg>
+      );
+    case "imaging":
+      return (
+        <svg {...commonProps}>
+          <rect x="3" y="4" width="18" height="16" rx="2" />
+          <circle cx="9" cy="10" r="2" />
+          <path d="m21 16-5-5-8 9" />
+        </svg>
+      );
+    case "ai":
+      return (
+        <svg {...commonProps}>
+          <path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z" />
+          <path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z" />
         </svg>
       );
     case "notes":
@@ -229,58 +348,108 @@ function SidebarIcon({ name }: { name: SidebarIconName }) {
 const EDITABLE_NOTE_STATUSES = new Set(["draft", "rejected", "reopened"]);
 
 const noteStatusLabels: Record<string, string> = {
-  draft: "Draft",
-  reopened: "Reopened",
-  submitted: "Submitted",
-  approved: "Approved",
-  rejected: "Rejected",
+  draft: "초안",
+  reopened: "재개됨",
+  submitted: "제출됨",
+  approved: "승인됨",
+  rejected: "반려됨",
 };
 
 const approvalEventLabels: Record<string, string> = {
-  submitted: "Submitted",
-  approved: "Approved",
-  rejected: "Rejected",
-  reopened: "Reopened",
+  submitted: "제출됨",
+  approved: "승인됨",
+  rejected: "반려됨",
+  reopened: "재개됨",
 };
 
 const approvalNoticeByAction: Record<"submit" | "approve" | "reject" | "reopen", string> = {
-  submit: "Research note submitted for approval.",
-  approve: "Research note approved and locked.",
-  reject: "Research note rejected for revision.",
-  reopen: "Approved research note reopened for revision.",
+  submit: "연구노트를 승인 요청했습니다.",
+  approve: "연구노트가 승인되어 잠겼습니다.",
+  reject: "연구노트가 반려되었습니다.",
+  reopen: "승인된 연구노트를 수정을 위해 다시 열었습니다.",
 };
 
 const projectStatusOptions = [
-  { value: "active", label: "Active" },
-  { value: "planned", label: "Planned" },
-  { value: "on_hold", label: "On Hold" },
-  { value: "completed", label: "Completed" },
+  { value: "active", label: "활성" },
+  { value: "planned", label: "계획" },
+  { value: "on_hold", label: "보류" },
+  { value: "completed", label: "완료" },
 ];
 
+const projectStatusText: Record<string, string> = Object.fromEntries(
+  projectStatusOptions.map((option) => [option.value, option.label])
+);
+const roleText: Record<string, string> = {
+  owner: "관리자",
+  admin: "관리자",
+  lead: "책임자",
+  member: "연구원",
+  reviewer: "검토자",
+  co_researcher: "공동연구원",
+  student: "학생연구원",
+};
+// Roles a project member can have (the lead is set separately with "책임자로 지정").
+const PROJECT_ROLE_OPTIONS = [
+  { value: "member", label: "연구원" },
+  { value: "co_researcher", label: "공동연구원" },
+  { value: "student", label: "학생연구원" },
+  { value: "reviewer", label: "검토자" },
+];
+const mappingModeText: Record<string, string> = { pr_merge: "PR 병합 시에만", manual: "이벤트에서 수동 생성", every_push: "모든 푸시" };
+const githubEventStatusText: Record<string, string> = {
+  received: "수신됨",
+  pending: "대기",
+  processed: "처리됨",
+  generated: "노트 생성됨",
+  ignored: "무시됨",
+  skipped: "건너뜀",
+  failed: "실패",
+};
+
+function projectStatusLabel(status: string) {
+  return projectStatusText[status] ?? status;
+}
+
+function roleLabel(role: string) {
+  return roleText[role] ?? role;
+}
+
+function mappingModeLabel(mode: string) {
+  return mappingModeText[mode] ?? mode;
+}
+
+function githubEventStatusLabel(status: string) {
+  return githubEventStatusText[status] ?? status;
+}
+
 function formatProjectPeriod(startDate: string | null, endDate: string | null) {
-  const start = startDate ?? "TBD";
-  const end = endDate ?? "TBD";
+  const start = startDate ?? "미정";
+  const end = endDate ?? "미정";
   return `${start} - ${end}`;
 }
 
 function buildDefaultCoverTemplate(project: Project | null, managerName = "", organizationName = "LABNOTE"): CoverTemplate {
   return {
     organization: organizationName,
-    projectTitle: project?.name ?? "Research Note",
-    coverTitle: "The Research Notes",
+    projectTitle: project?.name ?? "연구노트",
+    coverTitle: "연구노트",
     projectCode: project?.code ?? "",
     principalInvestigator: managerName,
     projectPeriod: formatProjectPeriod(project?.start_date ?? null, project?.end_date ?? null),
-    footerNote: "This cover template is used for the research note package.",
+    footerNote: DEFAULT_COVER_FOOTER,
     overrideOrganization: false,
     overrideProjectTitle: false,
     overridePrincipalInvestigator: false,
+    overrideProjectCode: false,
+    overrideProjectPeriod: false,
     showOrganization: true,
     showProjectTitle: true,
     showCoverTitle: false,
     showCode: true,
     showPrincipalInvestigator: true,
     showProjectPeriod: true,
+    showTopLabel: true,
+    showFooter: true,
   };
 }
 
@@ -300,10 +469,15 @@ function parseCoverTemplate(payload: string | null, project: Project | null, man
         ?? buildDefaultCoverTemplate(project, managerName, organizationName).projectCode,
       principalInvestigator: (parsed.principalInvestigator as string) ?? (parsed.managerName as string) ?? buildDefaultCoverTemplate(project, managerName, organizationName).principalInvestigator,
       projectPeriod: (parsed.projectPeriod as string) ?? (parsed.periodText as string) ?? buildDefaultCoverTemplate(project, managerName, organizationName).projectPeriod,
-      footerNote: (parsed.footerNote as string) ?? buildDefaultCoverTemplate(project, managerName, organizationName).footerNote,
+      footerNote:
+        !parsed.footerNote || parsed.footerNote === LEGACY_COVER_FOOTER ? DEFAULT_COVER_FOOTER : (parsed.footerNote as string),
       overrideOrganization: (parsed.overrideOrganization as boolean) ?? false,
       overrideProjectTitle: (parsed.overrideProjectTitle as boolean) ?? false,
       overridePrincipalInvestigator: (parsed.overridePrincipalInvestigator as boolean) ?? false,
+      overrideProjectCode: (parsed.overrideProjectCode as boolean) ?? false,
+      overrideProjectPeriod: (parsed.overrideProjectPeriod as boolean) ?? false,
+      showTopLabel: (parsed.showTopLabel as boolean) ?? true,
+      showFooter: (parsed.showFooter as boolean) ?? true,
       showOrganization: (parsed.showOrganization as boolean) ?? (parsed.showBusinessName as boolean) ?? true,
       showProjectTitle: (parsed.showProjectTitle as boolean) ?? (parsed.showTitle as boolean) ?? true,
       showCoverTitle: (parsed.showCoverTitle as boolean) ?? false,
@@ -323,8 +497,9 @@ function resolveCoverTemplate(template: CoverTemplate, project: Project | null, 
     organization: template.overrideOrganization ? template.organization : defaults.organization,
     projectTitle: template.overrideProjectTitle ? template.projectTitle : defaults.projectTitle,
     principalInvestigator: template.overridePrincipalInvestigator ? template.principalInvestigator : defaults.principalInvestigator,
-    projectCode: template.projectCode?.trim() ? template.projectCode : defaults.projectCode,
-    projectPeriod: template.projectPeriod?.trim() ? template.projectPeriod : defaults.projectPeriod,
+    projectCode: template.overrideProjectCode ? template.projectCode : defaults.projectCode,
+    projectPeriod: template.overrideProjectPeriod ? template.projectPeriod : defaults.projectPeriod,
+    coverTitle: template.coverTitle?.trim() ? template.coverTitle : defaults.coverTitle,
   };
 }
 
@@ -337,7 +512,7 @@ async function generateCoverImageDataUrl(template: CoverTemplate, project: Proje
   canvas.width = COVER_LAYOUT.page_width;
   canvas.height = COVER_LAYOUT.page_height;
   const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Failed to prepare cover image canvas");
+  if (!ctx) throw new Error("표지 이미지를 준비하지 못했습니다");
 
   await Promise.all([
     loadFontFace(`${COVER_LAYOUT.top_label.font_size}px "Segoe UI"`),
@@ -357,8 +532,10 @@ async function generateCoverImageDataUrl(template: CoverTemplate, project: Proje
     { label: "연구책임자", value: template.showPrincipalInvestigator ? template.principalInvestigator : "" },
     { label: "연구기관", value: template.showOrganization ? template.organization : "" },
     {
-      label: "기간",
-      value: template.showProjectPeriod ? `${project?.start_date ?? "TBD"} - ${project?.end_date ?? "TBD"}` : "",
+      label: "연구 기간",
+      value: template.showProjectPeriod
+        ? template.projectPeriod || formatProjectPeriod(project?.start_date ?? null, project?.end_date ?? null)
+        : "",
     },
   ];
 
@@ -373,7 +550,9 @@ async function generateCoverImageDataUrl(template: CoverTemplate, project: Proje
   ctx.font = `700 ${topLabel.font_size}px "Segoe UI"`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText("연구노트", canvas.width / 2, topLabel.top + topLabel.height / 2);
+  if (template.showTopLabel) {
+    ctx.fillText(template.coverTitle || "연구노트", canvas.width / 2, topLabel.top + topLabel.height / 2);
+  }
 
   ctx.fillStyle = "#0f172a";
   ctx.font = `800 ${titleRect.font_size}px "Segoe UI"`;
@@ -410,11 +589,9 @@ async function generateCoverImageDataUrl(template: CoverTemplate, project: Proje
   ctx.fillStyle = "#64748b";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(
-    "Research records are maintained according to the registered project information.",
-    footer.x + footer.width / 2,
-    footer.y + footer.height / 2
-  );
+  if (template.showFooter) {
+    ctx.fillText(template.footerNote, footer.x + footer.width / 2, footer.y + footer.height / 2);
+  }
 
   return canvas.toDataURL("image/png");
 }
@@ -427,7 +604,7 @@ async function generateTocImageDataUrl(
   canvas.width = 794;
   canvas.height = 1123;
   const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Failed to prepare toc image canvas");
+  if (!ctx) throw new Error("목차 이미지를 준비하지 못했습니다");
 
   await Promise.all([loadFontFace(`700 18px "Segoe UI"`), loadFontFace(`10px "Segoe UI"`)]);
 
@@ -477,10 +654,10 @@ async function generateTocImageDataUrl(
   });
 
   const headers = [
-    { label: "Index", x: tableX, w: indexW },
-    { label: "Title", x: tableX + indexW, w: titleW },
-    { label: "Created", x: tableX + indexW + titleW, w: dateW },
-    { label: "Page", x: tableX + indexW + titleW + dateW, w: pageW },
+    { label: "번호", x: tableX, w: indexW },
+    { label: "제목", x: tableX + indexW, w: titleW },
+    { label: "작성일", x: tableX + indexW + titleW, w: dateW },
+    { label: "페이지", x: tableX + indexW + titleW + dateW, w: pageW },
   ];
 
   ctx.fillStyle = "#334155";
@@ -548,28 +725,12 @@ type NoteTemplateOverrides = {
   reviewedDate?: string;
 };
 
-function buildResearchNotePageTemplateSvg(): string {
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="794" height="1123" viewBox="0 0 794 1123">
-      <rect x="20" y="25" width="754" height="1073" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5" />
-      <line x1="20" y1="55" x2="774" y2="55" stroke="#94a3b8" stroke-width="1.2" />
-      <line x1="20" y1="955" x2="774" y2="955" stroke="#94a3b8" stroke-width="1.2" />
-      <line x1="20" y1="1026" x2="774" y2="1026" stroke="#94a3b8" stroke-width="1.2" />
-      <line x1="250" y1="955" x2="250" y2="1098" stroke="#94a3b8" stroke-width="1.2" />
-      <line x1="510" y1="955" x2="510" y2="1098" stroke="#94a3b8" stroke-width="1.2" />
-      <text x="32" y="44" font-size="12" fill="#334155" font-family="Arial">Title :</text>
-      <text x="32" y="971" font-size="11" fill="#334155" font-family="Arial">Recorded By</text>
-      <text x="270" y="971" font-size="11" fill="#334155" font-family="Arial">Signature</text>
-      <text x="528" y="971" font-size="11" fill="#334155" font-family="Arial">Date</text>
-      <text x="32" y="1042" font-size="11" fill="#334155" font-family="Arial">Witnessed By</text>
-      <text x="270" y="1042" font-size="11" fill="#334155" font-family="Arial">Signature</text>
-      <text x="528" y="1042" font-size="11" fill="#334155" font-family="Arial">Date</text>
-    </svg>
-  `;
-  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
-}
-
-function buildNoteTemplateBlocks(note: ResearchNote, context: NoteTemplateContext): Array<TextBlock | ImageBlock> {
+function buildNoteTemplateBlocks(
+  note: ResearchNote,
+  context: NoteTemplateContext,
+  format: NoteFormat = DEFAULT_NOTE_FORMAT
+): Array<TextBlock | ImageBlock> {
+  const allowed = formatTemplateBlockIds(format);
   const blocks: Array<TextBlock | ImageBlock> = [
     makeTextBlock("note-title", 82, 26, 640, 20, note.title, {
       style: { fontSize: 13, fontWeight: "normal", textAlign: "left" },
@@ -595,10 +756,7 @@ function buildNoteTemplateBlocks(note: ResearchNote, context: NoteTemplateContex
     blocks.push({
       id: "author-signature",
       type: "image",
-      x: 258,
-      y: 975,
-      w: 194,
-      h: 58,
+      ...SIGNATURE_RECTS.author,
       src: context.authorSignatureUrl,
       locked: true,
     });
@@ -608,46 +766,44 @@ function buildNoteTemplateBlocks(note: ResearchNote, context: NoteTemplateContex
     blocks.push({
       id: "reviewer-signature",
       type: "image",
-      x: 258,
-      y: 1046,
-      w: 194,
-      h: 52,
+      ...SIGNATURE_RECTS.reviewer,
       src: context.reviewerSignatureUrl,
       locked: true,
     });
   }
 
-  return blocks;
+  return blocks.filter((block) => allowed.has(block.id));
 }
 
 function buildDefaultNoteDocument(
   note: ResearchNote,
   firstPage: NotePage | null,
-  context: NoteTemplateContext
+  context: NoteTemplateContext,
+  format: NoteFormat = DEFAULT_NOTE_FORMAT
 ): DocumentSchema {
-  const blocks = buildNoteTemplateBlocks(note, context);
-  if (firstPage) {
+  const blocks: Array<TextBlock | ImageBlock> = buildNoteTemplateBlocks(note, context, format);
+  const imageRect = formatImageRect(format);
+  if (firstPage && imageRect) {
     blocks.push({
       id: "content-image",
       type: "image",
-      x: 34,
-      y: 64,
-      w: 726,
-      h: 884,
+      ...imageRect,
       src: getBackendAssetUrl(`/storage/${firstPage.image_storage_key}`),
       locked: false,
     });
   }
+  // New notes start with the company's body sections laid out per the format.
+  blocks.push(...buildSectionBlocks(format));
 
   return {
     schemaVersion: 1,
     id: `draft-${crypto.randomUUID()}`,
-    title: `${note.title} Layout`,
+    title: `${note.title} 레이아웃`,
     page: {
       width: 794,
       height: 1123,
       background: "#ffffff",
-      backgroundImage: buildResearchNotePageTemplateSvg(),
+      backgroundImage: buildPageTemplateSvg(format),
     },
     meta: {
       noteId: note.id,
@@ -658,8 +814,13 @@ function buildDefaultNoteDocument(
   };
 }
 
-function ensureResearchNoteDocumentFrame(document: DocumentSchema, note: ResearchNote, context: NoteTemplateContext): DocumentSchema {
-  const templateBlocks = buildNoteTemplateBlocks(note, context);
+function ensureResearchNoteDocumentFrame(
+  document: DocumentSchema,
+  note: ResearchNote,
+  context: NoteTemplateContext,
+  format: NoteFormat = DEFAULT_NOTE_FORMAT
+): DocumentSchema {
+  const templateBlocks = buildNoteTemplateBlocks(note, context, format);
   const templateById = new Map(templateBlocks.map((block) => [block.id, block]));
   const frameBlockIds = new Set([
     "note-title",
@@ -678,7 +839,7 @@ function ensureResearchNoteDocumentFrame(document: DocumentSchema, note: Researc
       : null;
   const nextBackgroundImage =
     !document.page.backgroundImage || document.page.backgroundImage.startsWith("data:image/svg+xml")
-      ? buildResearchNotePageTemplateSvg()
+      ? buildPageTemplateSvg(format)
       : document.page.backgroundImage;
 
   if (document.blocks.length === 0) {
@@ -686,14 +847,17 @@ function ensureResearchNoteDocumentFrame(document: DocumentSchema, note: Researc
       ...document,
       page: {
         ...document.page,
-        backgroundImage: buildResearchNotePageTemplateSvg(),
+        backgroundImage: buildPageTemplateSvg(format),
       },
       blocks: templateBlocks,
     };
   }
 
   const nextBlocks = document.blocks
-    .filter((block) => block.type === "image" || frameBlockIds.has(block.id))
+    // Keep images, template fields, and free text blocks (editor, AI and GitHub drafts).
+    // Only stale copies of template-only ids are dropped.
+    // Template fields the format hides (e.g. signature area turned off) are dropped.
+    .filter((block) => (frameBlockIds.has(block.id) ? templateById.has(block.id) : true))
     .map((block) => {
     const templateBlock = templateById.get(block.id);
     if (!templateBlock || templateBlock.type !== block.type) {
@@ -730,19 +894,18 @@ function ensureResearchNoteDocumentFrame(document: DocumentSchema, note: Researc
 
   const missingTemplateBlocks = templateBlocks.filter(
     (templateBlock) => !nextBlocks.some((block) => block.id === templateBlock.id)
+      && !(document.blocks.some((block) => block.id === "ai-batch-body") && templateBlock.id.startsWith("section-"))
   );
 
   const hasContentImage = nextBlocks.some((block) => block.id === "content-image");
+  const recoveryRect = formatImageRect(format);
   const recoveredContentImage =
-    !hasExistingFrame && sourcePageImage && !hasContentImage
+    !hasExistingFrame && sourcePageImage && !hasContentImage && recoveryRect
       ? [
           {
             id: "content-image",
             type: "image" as const,
-            x: 34,
-            y: 64,
-            w: 726,
-            h: 884,
+            ...recoveryRect,
             src: sourcePageImage,
             locked: false,
           },
@@ -759,26 +922,53 @@ function ensureResearchNoteDocumentFrame(document: DocumentSchema, note: Researc
   };
 }
 
-export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }: Props) {
-  const [activeSection, setActiveSection] = useState<UserSection>("home");
+export function HomePage({ currentUser, onCurrentUserChange, openProfileToken, searchRequest }: Props) {
+  const [activeSection, setActiveSection] = useState<UserSection>(() => (hasGitHubCallback() ? "github" : "home"));
+  // A note picked from search; opened once its project's note list has loaded.
+  const pendingSearchNoteId = useRef<string | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed);
+  const toggleSidebar = () => setSidebarCollapsed((value) => !value);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? "1" : "0");
+    } catch {
+      // Storage may be unavailable (private mode); the toggle still works for this visit.
+    }
+  }, [sidebarCollapsed]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === "\\") {
+        event.preventDefault();
+        setSidebarCollapsed((value) => !value);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
   const [projectView, setProjectView] = useState<ProjectWorkspaceView>("dashboard");
   const [showCreateProjectForm, setShowCreateProjectForm] = useState(false);
-  const [showGitHubRepositoryModal, setShowGitHubRepositoryModal] = useState(false);
-  const [showGitHubMappingModal, setShowGitHubMappingModal] = useState(false);
+  const [showBatchGenerator, setShowBatchGenerator] = useState(false);
   const [openedProjectId, setOpenedProjectId] = useState<string | null>(null);
 
   const [projects, setProjects] = useState<Project[]>([]);
+  const [projectsReady, setProjectsReady] = useState(false);
   const [companyMembers, setCompanyMembers] = useState<CompanyMemberDirectoryItem[]>([]);
   const [researcherManagement, setResearcherManagement] = useState<ResearcherManagementData | null>(null);
-  const [githubIntegrations, setGithubIntegrations] = useState<GitHubRepositoryIntegration[]>([]);
+  const [llmStatus, setLlmStatus] = useState<NoteGenerationStatus | null>(null);
+  const [noteFormatInfo, setNoteFormatInfo] = useState<NoteFormatInfo | null>(null);
+  const [noteFormatError, setNoteFormatError] = useState<string | null>(null);
+  const noteFormat = noteFormatInfo?.format ?? DEFAULT_NOTE_FORMAT;
   const [githubProjectMappings, setGithubProjectMappings] = useState<GitHubProjectMapping[]>([]);
-  const [githubEvents, setGithubEvents] = useState<GitHubEvent[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [members, setMembers] = useState<ProjectMember[]>([]);
   const [projectCover, setProjectCover] = useState<ProjectNoteCover | null>(null);
   const [coverPreviewImageUrl, setCoverPreviewImageUrl] = useState<string | null>(null);
   const [tocPreviewImageUrl, setTocPreviewImageUrl] = useState<string | null>(null);
   const [notes, setNotes] = useState<ResearchNote[]>([]);
+  const [noteBundles, setNoteBundles] = useState<NoteBundle[]>([]);
+  const [bundleFilter, setBundleFilter] = useState<BundleFilter>(ALL_BUNDLES);
   const [selectedNote, setSelectedNote] = useState<ResearchNote | null>(null);
   const [approvalEvents, setApprovalEvents] = useState<ResearchNoteApprovalEvent[]>([]);
   const [approvalComment, setApprovalComment] = useState("");
@@ -798,18 +988,6 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
   const [companyAccessName, setCompanyAccessName] = useState("");
   const [companyAccessCode, setCompanyAccessCode] = useState("");
   const [companyAccessNotice, setCompanyAccessNotice] = useState<string | null>(null);
-  const [githubRepoOwner, setGithubRepoOwner] = useState("");
-  const [githubRepoName, setGithubRepoName] = useState("");
-  const [githubRepoUrl, setGithubRepoUrl] = useState("");
-  const [githubDefaultBranch, setGithubDefaultBranch] = useState("main");
-  const [githubNotes, setGithubNotes] = useState("");
-  const [githubMappingIntegrationId, setGithubMappingIntegrationId] = useState<number | "">("");
-  const [githubMappingProjectId, setGithubMappingProjectId] = useState("");
-  const [githubMappingBranchPattern, setGithubMappingBranchPattern] = useState("main");
-  const [githubMappingMode, setGithubMappingMode] = useState("pr_merge");
-  const [githubMappingAuthorMemberId, setGithubMappingAuthorMemberId] = useState<number | "">("");
-  const [githubMappingReviewerMemberId, setGithubMappingReviewerMemberId] = useState<number | "">("");
-  const [githubWebhookSecretNotice, setGithubWebhookSecretNotice] = useState<string | null>(null);
 
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
@@ -821,7 +999,6 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
 
   const [memberId, setMemberId] = useState<number | "">("");
   const [memberRole, setMemberRole] = useState("member");
-  const [inviteEmail, setInviteEmail] = useState("");
 
   const [projectNameDraft, setProjectNameDraft] = useState("");
   const [projectCodeDraft, setProjectCodeDraft] = useState("");
@@ -845,12 +1022,30 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
   const [noteFileTypeFilter, setNoteFileTypeFilter] = useState("all");
   const [isNoteFileDragging, setIsNoteFileDragging] = useState(false);
   const noteUploadInputRef = useRef<HTMLInputElement | null>(null);
+  const noteFolderInputRef = useRef<HTMLInputElement | null>(null);
   const noteCreateUploadInputRef = useRef<HTMLInputElement | null>(null);
   const [showNoteModal, setShowNoteModal] = useState(false);
   const [noteModalMode, setNoteModalMode] = useState<"create" | "edit">("create");
   const [openedResearchNoteId, setOpenedResearchNoteId] = useState<string | null>(null);
-  const [isResearchFilesExpanded, setIsResearchFilesExpanded] = useState(true);
   const [pendingNoteFiles, setPendingNoteFiles] = useState<File[]>([]);
+  const [bulkUploadFiles, setBulkUploadFiles] = useState<UploadItem[] | null>(null);
+  // Files for the new-note page; null while the page is closed.
+  const [noteCreateFiles, setNoteCreateFiles] = useState<File[] | null>(null);
+  // All notes across the user's projects, for the home to-do lists.
+  const [homeNotes, setHomeNotes] = useState<ResearchNote[]>([]);
+  const [homeNotesStatus, setHomeNotesStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [homeNotesAttempt, setHomeNotesAttempt] = useState(0);
+  // Documents handed from 데이터 보관함 to the AI 생성 tab.
+  const [aiSeedDocuments, setAiSeedDocuments] = useState<{ files: File[]; token: number } | null>(null);
+  const [signatureReminderHidden, setSignatureReminderHidden] = useState(() => {
+    try {
+      return window.sessionStorage.getItem("labnote.signatureReminderHidden") === "1";
+    } catch {
+      return false;
+    }
+  });
+  // Shown to whoever assigns a project lead who has not registered a signature yet.
+  const [leadSignatureNotice, setLeadSignatureNotice] = useState<string | null>(null);
   const [noteNotice, setNoteNotice] = useState<string | null>(null);
   const [selectedNoteIds, setSelectedNoteIds] = useState<string[]>([]);
   const [isNoteSelectionMode, setIsNoteSelectionMode] = useState(false);
@@ -860,12 +1055,19 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
   const [noteLayoutStatus, setNoteLayoutStatus] = useState<Record<string, boolean>>({});
 
   const currentCompanyMember = companyMembers.find((member) => member.user_id === currentUser.id) ?? null;
+  // Projects this user leads: approving their notes stamps the user's signature.
+  const myLedProjects = currentCompanyMember
+    ? projects.filter((project) => project.owner_member_id === currentCompanyMember.company_member_id)
+    : [];
+  const myReviewWaiting = currentCompanyMember
+    ? homeNotes.filter((note) => note.status === "submitted" && note.reviewer_member_id === currentCompanyMember.company_member_id)
+    : [];
+  const needsOwnSignature = (myLedProjects.length > 0 || myReviewWaiting.length > 0) && !signaturePreview;
   const canManageSelectedProject = Boolean(
     selectedProject &&
       (currentUser.is_org_owner ||
         (currentCompanyMember && selectedProject.owner_member_id === currentCompanyMember.company_member_id))
   );
-  const canManageGitHubIntegrations = currentUser.is_org_owner || currentUser.is_admin;
   const availableProjectResearchers = companyMembers.filter(
     (companyMember) => !members.some((member) => member.company_member_id === companyMember.company_member_id)
   );
@@ -874,7 +1076,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
       if (left.role !== "owner" && right.role === "owner") return 1;
       return left.name.localeCompare(right.name, "ko");
     });
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayIso = new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
   const defaultNoteAuthorMemberId: number | "" = currentCompanyMember?.company_member_id ?? companyMembers[0]?.company_member_id ?? "";
   const defaultNoteReviewerMemberId: number | "" = selectedProject?.owner_member_id ?? "";
   const projectResearchers = [...members].sort((left, right) => {
@@ -913,21 +1115,60 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
     setNotesPage(1);
     setSelectedNoteIds([]);
     setIsNoteSelectionMode(false);
+    setBundleFilter(ALL_BUNDLES);
   }, [selectedProject?.id]);
+
+  useEffect(() => {
+    setNotesPage(1);
+  }, [bundleFilter]);
 
   useEffect(() => {
     const totalPages = Math.max(1, Math.ceil(notes.length / 10));
     setNotesPage((current) => Math.min(current, totalPages));
   }, [notes]);
 
+  useEffect(() => {
+    let active = true;
+    getNoteFormat()
+      .then((info) => {
+        if (!active) return;
+        setNoteFormatInfo(info);
+        setNoteFormatError(null);
+      })
+      .catch((formatError) => active && setNoteFormatError((formatError as Error).message));
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const onSaveNoteFormat = async (format: NoteFormat) => {
+    const saved = await saveNoteFormat(format);
+    setNoteFormatInfo(saved);
+  };
+
+  const onDeleteNoteFormat = async () => {
+    setNoteFormatInfo(await deleteNoteFormat());
+  };
+
+  useEffect(() => {
+    let active = true;
+    getNoteGenerationStatus()
+      .then((status) => active && setLlmStatus(status))
+      .catch(() => active && setLlmStatus(null));
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const getCompanyMemberName = (companyMemberId: number | null | undefined) => {
-    if (!companyMemberId) return "Unassigned";
+    if (!companyMemberId) return "미지정";
     return companyMembers.find((member) => member.company_member_id === companyMemberId)?.name ?? `Member #${companyMemberId}`;
   };
 
   const getCompanyMember = (companyMemberId: number | null | undefined) =>
     companyMemberId ? companyMembers.find((member) => member.company_member_id === companyMemberId) ?? null : null;
 
+  const [aiReview, setAiReview] = useState<AiReviewState | null>(null);
   const selectedNoteIsLocked = selectedNote ? !EDITABLE_NOTE_STATUSES.has(selectedNote.status) : false;
   const selectedNoteIsAuthor = Boolean(
     selectedNote && currentCompanyMember?.company_member_id === selectedNote.owner_member_id
@@ -941,7 +1182,8 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
   const canSubmitSelectedNote = Boolean(
     selectedNote &&
       EDITABLE_NOTE_STATUSES.has(selectedNote.status) &&
-      (canManageSelectedProject || selectedNoteIsAuthor)
+      (canManageSelectedProject || selectedNoteIsAuthor) &&
+      !(aiReview?.required && !aiReview.reviewed)
   );
   const canReviewSelectedNote = Boolean(
     selectedNote &&
@@ -976,7 +1218,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
             ? requestedReviewerMemberId
             : projectManagerMemberId;
       return {
-        projectTitle: selectedProject?.name ?? "Research Project",
+        projectTitle: selectedProject?.name ?? "연구 과제",
         projectPeriod: formatProjectPeriod(selectedProject?.start_date ?? null, selectedProject?.end_date ?? null),
         principalInvestigator: getCompanyMemberName(selectedProject?.owner_member_id),
         organization: researcherManagement?.company.name ?? coverTemplate.organization ?? "LABNOTE",
@@ -1002,10 +1244,12 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
     try {
       if (!currentUser.organization_id) {
         setProjects([]);
+        setProjectsReady(true);
         return;
       }
       const data = await listProjects(currentUser.organization_id);
       setProjects(data);
+      setProjectsReady(true);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -1043,29 +1287,32 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
     }
   };
 
+  // Only the repository links are needed here (project dashboard KPI); the GitHub screens load their own data.
   const refreshGitHubIntegrations = async () => {
     try {
       if (!currentUser.organization_id) {
-        setGithubIntegrations([]);
         setGithubProjectMappings([]);
-        setGithubEvents([]);
         return;
       }
       const data = await listGitHubIntegrations(currentUser.organization_id);
-      setGithubIntegrations(data);
-      setGithubMappingIntegrationId((current) => data.some((integration) => integration.id === current) ? current : data[0]?.id || "");
       const mappingGroups = await Promise.all(data.map((integration) => listGitHubProjectMappings(integration.id)));
       setGithubProjectMappings(mappingGroups.flat());
-      setGithubEvents(await listGitHubEvents());
-    } catch (err) {
-      setError((err as Error).message);
+    } catch {
+      setGithubProjectMappings([]);
     }
   };
 
   const refreshNotes = async (projectId: string) => {
     try {
-      const data = await listResearchNotes(projectId);
+      const [data, bundles] = await Promise.all([
+        listResearchNotes(projectId),
+        listNoteBundles(projectId).catch(() => [] as NoteBundle[]),
+      ]);
       setNotes(data);
+      setNoteBundles(bundles);
+      setBundleFilter((current) =>
+        current === ALL_BUNDLES || current === "none" || bundles.some((bundle) => bundle.id === current) ? current : ALL_BUNDLES
+      );
       const layoutEntries = await Promise.all(
         data.map(async (note) => {
           const documents = await listResearchNoteDocuments(note.id);
@@ -1114,7 +1361,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
         const targetNote = selectedNote && selectedNote.id === noteId ? selectedNote : await getResearchNote(noteId);
         setActiveNoteDocument({
           ...fullDocument,
-          document: ensureResearchNoteDocumentFrame(fullDocument.document, targetNote, buildNoteTemplateContext(overrides)),
+          document: ensureResearchNoteDocumentFrame(fullDocument.document, targetNote, buildNoteTemplateContext(overrides), noteFormat),
         });
         return true;
       } catch (err) {
@@ -1186,6 +1433,16 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
   }, [currentUser.id, currentUser.is_org_owner, currentUser.organization_id, onCurrentUserChange]);
 
   useEffect(() => {
+    const pendingId = pendingSearchNoteId.current;
+    if (pendingId && notes.some((note) => note.id === pendingId)) {
+      pendingSearchNoteId.current = null;
+      void (async () => {
+        await onSelectNote(pendingId);
+        setOpenedResearchNoteId(pendingId);
+      })();
+      return;
+    }
+
     if (selectedNote) {
       const stillExists = notes.some((note) => note.id === selectedNote.id);
       if (!stillExists) {
@@ -1261,7 +1518,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
   useEffect(() => {
     let cancelled = false;
 
-    const fallbackTitle = selectedProject?.name ?? "Research Note";
+    const fallbackTitle = selectedProject?.name ?? "연구노트";
     const sampleEntries = (notes.length > 0 ? notes.slice(0, 20) : [{ id: "sample", title: fallbackTitle, created_at: new Date().toISOString() } as ResearchNote]).map(
       (note, index) => ({
         index: index + 1,
@@ -1288,13 +1545,23 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
     };
   }, [notes, selectedProject?.name]);
 
+  const warnIfLeadHasNoSignature = (memberId: number | "" | null | undefined, projectName: string) => {
+    if (memberId === "" || memberId == null) return;
+    const member = companyMembers.find((item) => item.company_member_id === Number(memberId));
+    if (!member || member.user_id === currentUser.id || member.signature_data_url) return;
+    setLeadSignatureNotice(
+      `${member.name}님을 "${projectName}" 책임자로 지정했지만 아직 서명이 등록되지 않았습니다. ` +
+        `${member.name}님이 로그인 후 프로필에서 서명을 등록해야 결재에 서명이 들어갑니다.`
+    );
+  };
+
   const onCreateProject = async (event: FormEvent) => {
     event.preventDefault();
     setError(null);
 
     try {
       if (!currentUser.organization_id) {
-        throw new Error("You must belong to an organization before creating a project.");
+        throw new Error("프로젝트를 만들려면 먼저 기관에 소속되어야 합니다.");
       }
       await createProject({
         company_id: currentUser.organization_id,
@@ -1314,6 +1581,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
       setEndDate("");
       setMonthlyNoteTarget("");
       setShowCreateProjectForm(false);
+      warnIfLeadHasNoSignature(ownerMemberId, name);
       await refreshProjects();
       hydrateDefaultMember(companyMembers);
       setActiveSection("projects");
@@ -1328,6 +1596,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
     setActiveSection("projects");
     setSelectedProject(project);
     setProjectView("dashboard");
+    setNoteCreateFiles(null);
     setSelectedNote(null);
     setOpenedResearchNoteId(null);
     setActiveNoteDocument(null);
@@ -1351,16 +1620,131 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
     }
   };
 
-  const onOpenProjectPage = async (project: Project) => {
+  const onOpenProjectPage = async (project: Project, view: ProjectWorkspaceView = "dashboard") => {
     const loaded = await onSelectProject(project);
-    if (!loaded) return;
+    if (!loaded) return false;
     setOpenedProjectId(project.id);
-    setProjectView("dashboard");
+    setProjectView(view);
+    return true;
   };
 
   const onBackToProjects = () => {
     setOpenedProjectId(null);
   };
+
+  useEffect(() => {
+    if (projectView !== "notes" || activeSection !== "projects" || !openedProjectId) setBulkUploadFiles(null);
+  }, [projectView, activeSection, openedProjectId]);
+
+  useEffect(() => {
+    if (activeSection !== "home" || openedProjectId) return;
+    let live = true;
+    setHomeNotesStatus("loading");
+    listAllResearchNotes()
+      .then((items) => {
+        if (!live) return;
+        setHomeNotes(items);
+        setHomeNotesStatus("ready");
+      })
+      .catch(() => {
+        if (!live) return;
+        setHomeNotes([]);
+        setHomeNotesStatus("error");
+      });
+    return () => {
+      live = false;
+    };
+  }, [activeSection, openedProjectId, currentUser.id, currentUser.organization_id, homeNotesAttempt]);
+
+  // ─── URL ⇄ screen ──────────────────────────────────────────────────────
+  // The route from the address bar (on load, or after back/forward) waits here until projects are loaded.
+  const pendingRoute = useRef<AppRoute | null>(hasGitHubCallback() ? null : parseRoute(window.location.pathname, window.location.search));
+  // While a route is being restored, intermediate screens replace the URL instead of adding history entries.
+  const restoringRoute = useRef(pendingRoute.current !== null);
+  const [routeTick, setRouteTick] = useState(0);
+
+  useEffect(() => {
+    const onPop = () => {
+      pendingRoute.current = parseRoute(window.location.pathname, window.location.search);
+      restoringRoute.current = true;
+      setRouteTick((value) => value + 1);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  useEffect(() => {
+    const route = pendingRoute.current;
+    if (!route || !projectsReady) return;
+    pendingRoute.current = null;
+    void (async () => {
+      try {
+        if (route.kind === "section") {
+          setOpenedProjectId(null);
+          setOpenedResearchNoteId(null);
+          setActiveSection(route.section);
+          return;
+        }
+        const project = projects.find((item) => item.id === route.projectId);
+        if (!project) {
+          // Deleted, or not shared with this account: fall back to the project list.
+          setOpenedProjectId(null);
+          setActiveSection("projects");
+          return;
+        }
+        if (openedProjectId !== project.id) {
+          pendingSearchNoteId.current = route.noteId ?? null;
+          const opened = await onOpenProjectPage(project, route.view);
+          if (!opened) pendingSearchNoteId.current = null;
+        } else {
+          setProjectView(route.view);
+          if (route.noteId && route.noteId !== openedResearchNoteId) await onOpenResearchNote(route.noteId);
+          if (!route.noteId) setOpenedResearchNoteId(null);
+        }
+      } finally {
+        // Let the restored screen render (and write its own URL) before normal history pushes resume.
+        window.setTimeout(() => {
+          restoringRoute.current = false;
+        }, 300);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectsReady, routeTick]);
+
+  useEffect(() => {
+    // GitHub's sign-in code is still in the address bar; the GitHub page removes it itself.
+    if (pendingRoute.current || hasGitHubCallback()) return;
+    const route: AppRoute =
+      activeSection === "projects" && openedProjectId
+        ? {
+            kind: "project",
+            projectId: openedProjectId,
+            view: projectView,
+            noteId: projectView === "notes" && openedResearchNoteId ? openedResearchNoteId : undefined,
+          }
+        : { kind: "section", section: activeSection };
+    const path = buildPath(route);
+    if (path !== currentPath()) writePath(path, restoringRoute.current);
+  }, [activeSection, openedProjectId, projectView, openedResearchNoteId]);
+
+  const onSearchNavigate = (target: SearchNavigation) => {
+    const project = projects.find((item) => item.id === target.projectId);
+    if (!project) {
+      setError("검색한 프로젝트를 찾을 수 없습니다. 새로고침 후 다시 시도하세요.");
+      return;
+    }
+    pendingSearchNoteId.current = target.kind === "note" ? target.noteId : null;
+    void (async () => {
+      const opened = await onOpenProjectPage(project, target.kind === "note" ? "notes" : "dashboard");
+      if (!opened) pendingSearchNoteId.current = null;
+    })();
+  };
+
+  useEffect(() => {
+    if (searchRequest) onSearchNavigate(searchRequest.target);
+    // Only a new request token should trigger navigation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchRequest?.token]);
 
   const onAssignMember = async (event: FormEvent) => {
     event.preventDefault();
@@ -1368,6 +1752,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
 
     try {
       await assignProjectMember(selectedProject.id, memberId, memberRole);
+      if (/책임|관리|lead|manager|owner|\bpi\b/i.test(memberRole)) warnIfLeadHasNoSignature(memberId, selectedProject.name);
       const data = await getProjectMembers(selectedProject.id);
       setMembers(data);
       setMemberId("");
@@ -1404,6 +1789,9 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
         end_date: projectEndDateDraft || undefined,
         monthly_note_target: projectMonthlyTargetDraft ? Number(projectMonthlyTargetDraft) : undefined,
       });
+      if (updated.owner_member_id !== selectedProject.owner_member_id) {
+        warnIfLeadHasNoSignature(updated.owner_member_id, updated.name);
+      }
       setSelectedProject(updated);
       setProjects((items) => items.map((item) => (item.id === updated.id ? updated : item)));
       hydrateProjectDrafts(updated);
@@ -1444,7 +1832,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
       setSelectedNoteIds([]);
       await onSelectNote(created.id);
       setOpenedResearchNoteId(created.id);
-      setNoteNotice(pendingNoteFiles.length > 0 ? "Research note created and files uploaded." : "Research note created.");
+      setNoteNotice(pendingNoteFiles.length > 0 ? "연구노트를 만들고 파일을 업로드했습니다." : "연구노트를 만들었습니다.");
     } catch (err) {
       setError((err as Error).message);
     }
@@ -1454,10 +1842,10 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
       try {
         const detail = await getResearchNote(noteId);
         const noteDefaults: NoteTemplateOverrides = {
-          authorMemberId: defaultNoteAuthorMemberId,
-          writtenDate: todayIso,
-          reviewerMemberId: defaultNoteReviewerMemberId,
-          reviewedDate: todayIso,
+          authorMemberId: detail.owner_member_id ?? defaultNoteAuthorMemberId,
+          writtenDate: detail.written_date ?? todayIso,
+          reviewerMemberId: detail.reviewer_member_id ?? defaultNoteReviewerMemberId,
+          reviewedDate: detail.reviewed_date ?? todayIso,
         };
         setSelectedNote(detail);
         setApprovalComment("");
@@ -1473,7 +1861,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
           const pages = await loadNotePagesForFiles(files);
           const hasDocument = await refreshNoteDocuments(noteId, noteDefaults);
           if (!hasDocument && pages.length > 0 && EDITABLE_NOTE_STATUSES.has(detail.status)) {
-            const draft = buildDefaultNoteDocument(detail, pages[0], buildNoteTemplateContext(noteDefaults));
+            const draft = buildDefaultNoteDocument(detail, pages[0], buildNoteTemplateContext(noteDefaults), noteFormat);
             const saved = await createResearchNoteDocument({
               note_id: detail.id,
               title: draft.title,
@@ -1498,7 +1886,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
     event.preventDefault();
     if (!selectedNote || !selectedProject) return;
     if (selectedNoteIsLocked) {
-      setError("Submitted or approved research notes cannot be changed.");
+      setError("제출되었거나 승인된 연구노트는 수정할 수 없습니다.");
       return;
     }
 
@@ -1521,21 +1909,18 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
     }
   };
 
+  // New notes are made on their own page (NoteCreatePage), not in the popup.
   const openCreateNoteModal = (files: File[] = []) => {
-      setNoteModalMode("create");
-      setNoteTitle("");
-      setNoteOwnerMemberId(defaultNoteAuthorMemberId);
-      setNoteWrittenDate(todayIso);
-      setNoteReviewerMemberId(defaultNoteReviewerMemberId);
-      setNoteReviewedDate(todayIso);
-      setPendingNoteFiles(files);
-      setShowNoteModal(true);
-    };
+    setError(null);
+    setNoteNotice(null);
+    setBulkUploadFiles(null);
+    setNoteCreateFiles(files);
+  };
 
   const openEditNoteModal = () => {
       if (!selectedNote) return;
       if (selectedNoteIsLocked) {
-        setError("Submitted or approved research notes cannot be changed.");
+        setError("제출되었거나 승인된 연구노트는 수정할 수 없습니다.");
         return;
       }
       setNoteModalMode("edit");
@@ -1548,16 +1933,21 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
       setShowNoteModal(true);
     };
 
-  const queueResearchFilesForNewNote = (files: File[]) => {
-    if (files.length === 0) return;
+  const queueResearchFilesForNewNote = (items: UploadItem[]) => {
+    if (items.length === 0) return;
     setError(null);
-    openCreateNoteModal(files);
+    // Several files or a folder: arrange them into notes first (titles, dates, grouping), then upload all at once.
+    if (items.length > 1 || hasFolders(items)) {
+      setBulkUploadFiles(items);
+      return;
+    }
+    openCreateNoteModal(items.map((item) => item.file));
   };
 
-  const onResearchFileDrop = async (event: DragEvent<HTMLButtonElement>) => {
+  const onResearchFileDrop = async (event: DragEvent<HTMLElement>) => {
     event.preventDefault();
     setIsNoteFileDragging(false);
-    queueResearchFilesForNewNote(Array.from(event.dataTransfer.files ?? []));
+    queueResearchFilesForNewNote(await collectDroppedItems(event.dataTransfer));
   };
 
   const onSelectFile = async (file: NoteFile) => {
@@ -1580,7 +1970,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
       }
       setActiveNoteDocument({
         ...document,
-        document: ensureResearchNoteDocumentFrame(document.document, selectedNote, buildNoteTemplateContext()),
+        document: ensureResearchNoteDocumentFrame(document.document, selectedNote, buildNoteTemplateContext(), noteFormat),
       });
     } catch (err) {
       setError((err as Error).message);
@@ -1590,11 +1980,11 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
   const onCreateNoteDocument = async () => {
     if (!selectedNote) return;
     if (selectedNoteIsLocked) {
-      setError("Submitted or approved research notes cannot be changed.");
+      setError("제출되었거나 승인된 연구노트는 수정할 수 없습니다.");
       return;
     }
     try {
-      const draft = buildDefaultNoteDocument(selectedNote, notePages[0] ?? null, buildNoteTemplateContext());
+      const draft = buildDefaultNoteDocument(selectedNote, notePages[0] ?? null, buildNoteTemplateContext(), noteFormat);
       const saved = await createResearchNoteDocument({
         note_id: selectedNote.id,
         title: draft.title,
@@ -1611,13 +2001,13 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
 
   const onSaveNoteDocument = async (document: DocumentSchema): Promise<ResearchNoteDocument> => {
     if (!selectedNote) {
-      throw new Error("Select a research note first");
+      throw new Error("먼저 연구노트를 선택하세요");
     }
     if (selectedNoteIsLocked) {
-      throw new Error("Submitted or approved research notes cannot be changed.");
+      throw new Error("제출되었거나 승인된 연구노트는 수정할 수 없습니다.");
     }
     try {
-      const normalizedDocument = ensureResearchNoteDocumentFrame(document, selectedNote, buildNoteTemplateContext());
+      const normalizedDocument = ensureResearchNoteDocumentFrame(document, selectedNote, buildNoteTemplateContext(), noteFormat);
       const saved = activeNoteDocument
         ? await updateResearchNoteDocument(activeNoteDocument.id, {
             note_id: selectedNote.id,
@@ -1646,7 +2036,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
   const onUploadFilesToSelectedNote = async (files: File[]) => {
     if (!selectedNote || files.length === 0) return;
     if (selectedNoteIsLocked) {
-      setError("Submitted or approved research notes cannot be changed.");
+      setError("제출되었거나 승인된 연구노트는 수정할 수 없습니다.");
       return;
     }
     try {
@@ -1664,7 +2054,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
         await onCreateNoteDocument();
       }
       setNoteNotice(
-        `${files.length} file${files.length > 1 ? "s were" : " was"} added to ${selectedNote.title}.`
+        `${selectedNote.title}에 파일 ${files.length}개를 추가했습니다.`
       );
     } catch (err) {
       setError((err as Error).message);
@@ -1673,20 +2063,20 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
 
   const onReplaceNotePageAsset = async (pageId: number, file: File): Promise<NotePage> => {
     if (!selectedNote) {
-      throw new Error("Select a research note first");
+      throw new Error("먼저 연구노트를 선택하세요");
     }
     if (selectedNoteIsLocked) {
-      throw new Error("Submitted or approved research notes cannot be changed.");
+      throw new Error("제출되었거나 승인된 연구노트는 수정할 수 없습니다.");
     }
     try {
       setError(null);
-      const updatedPage = await replaceNotePageAsset(pageId, file, "Replaced from document editor");
+      const updatedPage = await replaceNotePageAsset(pageId, file, "문서 편집기에서 교체함");
       setNotePages((current) => current.map((page) => (page.id === updatedPage.id ? updatedPage : page)));
       if (selectedNote) {
         const files = await refreshNoteFiles(selectedNote.id);
         await loadNotePagesForFiles(files);
       }
-      setNoteNotice("Research note page image replaced.");
+      setNoteNotice("연구노트 페이지 이미지를 교체했습니다.");
       return updatedPage;
     } catch (err) {
       setError((err as Error).message);
@@ -1712,7 +2102,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
     if (!selectedNote) return;
     const comment = approvalComment.trim();
     if ((action === "reject" || action === "reopen") && comment.length === 0) {
-      setError(action === "reject" ? "Rejection comment is required." : "Reopen reason is required.");
+      setError(action === "reject" ? "반려 사유를 입력하세요." : "재개 사유를 입력하세요.");
       return;
     }
 
@@ -1735,18 +2125,18 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
     }
   };
 
-  const onSaveProjectCover = async (event: FormEvent) => {
-    event.preventDefault();
+  const onSaveProjectCover = async (event?: FormEvent) => {
+    event?.preventDefault();
     if (!selectedProject) return;
 
-    try {
+    {
       const resolvedForSave = resolveCoverTemplate(
         coverTemplate,
         selectedProject,
         getCompanyMemberName(selectedProject?.owner_member_id),
         researcherManagement?.company.name ?? "LABNOTE"
       );
-      const coverImageDataUrl = coverPreviewImageUrl ?? (await generateCoverImageDataUrl(resolvedForSave, selectedProject));
+      const coverImageDataUrl = await generateCoverImageDataUrl(resolvedForSave, selectedProject);
       const saved = await upsertProjectCover(selectedProject.id, {
         cover_image_data_url: coverImageDataUrl,
         template_payload: JSON.stringify(coverTemplate, null, 2),
@@ -1758,8 +2148,6 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
         show_period: coverTemplate.showProjectPeriod,
       });
       hydrateCoverDrafts(saved);
-    } catch (err) {
-      setError((err as Error).message);
     }
   };
 
@@ -1771,7 +2159,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
       const updatedUser = await updateMySignature(dataUrl);
       onCurrentUserChange(updatedUser);
       setSignaturePreview(updatedUser.signature_data_url);
-      setProfileNotice(dataUrl ? "Signature updated." : "Signature removed.");
+      setProfileNotice(dataUrl ? "서명을 변경했습니다." : "서명을 삭제했습니다.");
       await Promise.all([refreshSignatures(), refreshCompanyMembers()]);
     } catch (err) {
       setError((err as Error).message);
@@ -1783,12 +2171,12 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
   const readSignatureFile = async (file: File) =>
     await new Promise<string>((resolve, reject) => {
       if (!file.type.startsWith("image/")) {
-        reject(new Error("Only image files can be used as a signature."));
+        reject(new Error("서명에는 이미지 파일만 사용할 수 있습니다."));
         return;
       }
       const reader = new FileReader();
       reader.onload = () => resolve(String(reader.result));
-      reader.onerror = () => reject(new Error("Failed to read the signature image."));
+      reader.onerror = () => reject(new Error("서명 이미지를 읽지 못했습니다."));
       reader.readAsDataURL(file);
     });
 
@@ -1802,7 +2190,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
       await createMySignature(file);
       onCurrentUserChange({ ...currentUser, signature_data_url: dataUrl });
       setSignaturePreview(dataUrl);
-      setProfileNotice("Signature uploaded.");
+      setProfileNotice("서명을 업로드했습니다.");
       await Promise.all([refreshSignatures(), refreshCompanyMembers()]);
     } catch (err) {
       setError((err as Error).message);
@@ -1820,7 +2208,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
         onCurrentUserChange({ ...currentUser, signature_data_url: null });
         setSignaturePreview(null);
       }
-      setProfileNotice("Signature removed.");
+      setProfileNotice("서명을 삭제했습니다.");
       await Promise.all([refreshSignatures(), refreshCompanyMembers()]);
     } catch (err) {
       setError((err as Error).message);
@@ -1845,8 +2233,21 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
   };
 
   const notesPerPage = 10;
-  const totalNotePages = Math.max(1, Math.ceil(notes.length / notesPerPage));
-  const paginatedNotes = notes.slice((notesPage - 1) * notesPerPage, notesPage * notesPerPage);
+  const visibleNotes = filterNotesByBundle(notes, bundleFilter);
+  const totalNotePages = Math.max(1, Math.ceil(visibleNotes.length / notesPerPage));
+  const paginatedNotes = visibleNotes.slice((notesPage - 1) * notesPerPage, notesPage * notesPerPage);
+
+  const onMoveNotesToBundle = async (noteIds: string[], bundleId: string | null) => {
+    if (!selectedProject || noteIds.length === 0) return;
+    try {
+      const { moved } = await moveNotesToBundle(selectedProject.id, noteIds, bundleId);
+      const target = noteBundles.find((bundle) => bundle.id === bundleId);
+      setNoteNotice(target ? `노트 ${moved}개를 '${target.name}' 묶음으로 옮겼습니다.` : `노트 ${moved}개를 묶음에서 뺐습니다.`);
+      await refreshNotes(selectedProject.id);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
 
   const onToggleAllNoteSelections = () => {
     const pageNoteIds = paginatedNotes.map((note) => note.id);
@@ -1863,12 +2264,12 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
     if (!isNoteSelectionMode) {
       setIsNoteSelectionMode(true);
       setSelectedNoteIds([]);
-      setNoteNotice("Select research notes to include, then click Download Selected again.");
+      setNoteNotice("포함할 연구노트를 선택한 뒤 다운로드를 다시 누르세요.");
       return;
     }
 
     if (selectedNoteIds.length === 0) {
-      setNoteNotice("Select at least one research note before downloading.");
+      setNoteNotice("다운로드할 연구노트를 하나 이상 선택하세요.");
       return;
     }
 
@@ -1878,7 +2279,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
       await downloadSelectedResearchNotesPdf(selectedNoteIds, (progress) => {
         setBatchDownloadProgress(progress.percent);
       });
-      setNoteNotice(`${selectedNoteIds.length} research note PDF${selectedNoteIds.length > 1 ? "s were" : " was"} downloaded.`);
+      setNoteNotice(`연구노트 PDF ${selectedNoteIds.length}개를 다운로드했습니다.`);
       setIsNoteSelectionMode(false);
       setSelectedNoteIds([]);
     } catch (err) {
@@ -1914,7 +2315,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
       }
       setSelectedNoteIds((current) => current.filter((id) => id !== noteId));
       await refreshNotes(selectedProject.id);
-      setNoteNotice("Research note and attached files were deleted.");
+      setNoteNotice("연구노트와 첨부 파일을 삭제했습니다.");
     } catch (err) {
       setError((err as Error).message);
     }
@@ -1940,134 +2341,6 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
     }
   };
 
-  const onCreateGitHubIntegration = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!currentUser.organization_id) return;
-    try {
-      setError(null);
-      await createGitHubIntegration({
-        company_id: currentUser.organization_id,
-        repo_owner: githubRepoOwner,
-        repo_name: githubRepoName,
-        repository_url: githubRepoUrl || undefined,
-        default_branch: githubDefaultBranch || "main",
-        status: "active",
-        notes: githubNotes || undefined,
-      });
-      setGithubRepoOwner("");
-      setGithubRepoName("");
-      setGithubRepoUrl("");
-      setGithubDefaultBranch("main");
-      setGithubNotes("");
-      await refreshGitHubIntegrations();
-      setShowGitHubRepositoryModal(false);
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  };
-
-  const onToggleGitHubIntegrationStatus = async (integration: GitHubRepositoryIntegration) => {
-    try {
-      setError(null);
-      await updateGitHubIntegration(integration.id, {
-        status: integration.status === "active" ? "paused" : "active",
-      });
-      await refreshGitHubIntegrations();
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  };
-
-  const onDeleteGitHubIntegration = async (integrationId: number) => {
-    try {
-      setError(null);
-      await deleteGitHubIntegration(integrationId);
-      await refreshGitHubIntegrations();
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  };
-
-  const onRotateGitHubWebhookSecret = async (integrationId: number) => {
-    try {
-      setError(null);
-      const result = await rotateGitHubWebhookSecret(integrationId);
-      setGithubWebhookSecretNotice(`Webhook URL: ${result.webhook_url} / Secret: ${result.webhook_secret}`);
-      await refreshGitHubIntegrations();
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  };
-
-  const onCreateGitHubProjectMapping = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!githubMappingIntegrationId || !githubMappingProjectId) return;
-    try {
-      setError(null);
-      await createGitHubProjectMapping(Number(githubMappingIntegrationId), {
-        project_id: githubMappingProjectId,
-        branch_pattern: githubMappingBranchPattern || "*",
-        note_creation_mode: githubMappingMode,
-        default_author_member_id: githubMappingAuthorMemberId === "" ? null : githubMappingAuthorMemberId,
-        default_reviewer_member_id: githubMappingReviewerMemberId === "" ? null : githubMappingReviewerMemberId,
-        is_active: true,
-      });
-      setGithubMappingProjectId("");
-      setGithubMappingBranchPattern("main");
-      setGithubMappingMode("pr_merge");
-      setGithubMappingAuthorMemberId("");
-      setGithubMappingReviewerMemberId("");
-      await refreshGitHubIntegrations();
-      setShowGitHubMappingModal(false);
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  };
-
-  const onToggleGitHubProjectMapping = async (mapping: GitHubProjectMapping) => {
-    try {
-      setError(null);
-      await updateGitHubProjectMapping(mapping.id, { is_active: !mapping.is_active });
-      await refreshGitHubIntegrations();
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  };
-
-  const onDeleteGitHubProjectMapping = async (mappingId: number) => {
-    try {
-      setError(null);
-      await deleteGitHubProjectMapping(mappingId);
-      await refreshGitHubIntegrations();
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  };
-
-  const onGenerateNoteFromGitHubEvent = async (eventId: number) => {
-    try {
-      setError(null);
-      await generateResearchNoteFromGitHubEvent(eventId);
-      await refreshGitHubIntegrations();
-      if (selectedProject) {
-        await refreshNotes(selectedProject.id);
-      }
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  };
-
-  const onInviteResearcher = async (event: FormEvent) => {
-    event.preventDefault();
-    try {
-      await createResearcherInvitation(inviteEmail);
-      setInviteEmail("");
-      await Promise.all([refreshResearcherManagement(), refreshCompanyMembers()]);
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  };
-
   const onRemoveCompanyResearcher = async (companyMemberId: number) => {
     try {
       await removeResearcherMember(companyMemberId);
@@ -2078,312 +2351,253 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
   };
 
   const renderHome = () => {
-    const recentProjects = projects.slice(0, 3);
-    const recentActivity = [
-      {
-        title: "Research workspace ready",
-        body: selectedProject
-          ? `${selectedProject.name} project workspace is available for dashboard, members, notes, and cover management.`
-          : "Open Project Management to enter a dedicated research note workspace.",
-        time: "Now",
-      },
-      {
-        title: "Researcher roster synced",
-        body: `${companyMembers.length} company members are available for company and project assignment flows.`,
-        time: "Today",
-      },
-      {
-        title: "Research note package export",
-        body: "Cover, table of contents, and selected note pages can be merged into a single PDF package.",
-        time: "Today",
-      },
-      {
-        title: "Profile signature ready",
-        body: currentUser.signature_data_url
-          ? "Your saved signature can be reused inside research note approval fields."
-          : "Add a signature from the profile menu to populate author approval fields automatically.",
-        time: "Profile",
-      },
+    const myMemberIds = new Set(
+      companyMembers.filter((member) => member.user_id === currentUser.id).map((member) => member.company_member_id)
+    );
+    const projectName = (projectId: string) => projects.find((project) => project.id === projectId)?.name ?? "";
+    const toReview = homeNotes.filter((note) => note.status === "submitted" && note.reviewer_member_id != null && myMemberIds.has(note.reviewer_member_id));
+    const myRejected = homeNotes.filter((note) => note.status === "rejected" && myMemberIds.has(note.owner_member_id));
+    const myDrafts = homeNotes.filter((note) => ["draft", "reopened"].includes(note.status) && myMemberIds.has(note.owner_member_id));
+    const today = new Date();
+    const monthKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+    const notesReady = homeNotesStatus === "ready";
+    const todoGroups: Array<{ key: string; title: string; hint: string; tone: string; items: ResearchNote[] }> = [
+      { key: "review", title: "내가 결재할 노트", hint: "검토자로 지정된 제출 노트", tone: "warn", items: toReview },
+      { key: "rejected", title: "반려된 내 노트", hint: "고쳐서 다시 제출하세요", tone: "danger", items: myRejected },
+      { key: "drafts", title: "제출 안 한 내 초안", hint: "작성을 마치면 제출하세요", tone: "", items: myDrafts },
     ];
+    const todoCount = toReview.length + myRejected.length + myDrafts.length;
+    const openNote = (note: ResearchNote) => onSearchNavigate({ kind: "note", projectId: note.project_id, noteId: note.id });
 
     return (
-      <div className="user-stack">
-        <section className="hero-panel">
-          <div className="hero-panel-left">
-            <p className="eyebrow">Workspace Overview</p>
-            <h2>Home</h2>
-            <p className="hero-copy">Check workspace status and move into each management area.</p>
-          </div>
-          <div className="hero-panel-right">
-            <span className="hero-metric-label">Notes created this month</span>
-            <strong className="hero-metric-value">{notes.length}</strong>
-            <span className="hero-metric-copy">Cover, table of contents, PDF pages, and merged export flows included.</span>
-          </div>
+      <div className="user-stack home">
+        <section className="home-greeting">
+          <h2>{currentUser.name}님, 안녕하세요</h2>
+          <span>
+            {today.toLocaleDateString("ko-KR", { month: "long", day: "numeric", weekday: "long" })}
+            {notesReady && (todoCount ? ` · 확인할 노트 ${todoCount}건` : " · 처리할 노트가 없습니다")}
+          </span>
         </section>
 
-        <section className="stats-grid">
-          <article className="stat-panel">
-            <span className="stat-label">Projects</span>
-            <strong className="stat-value">{projects.length}</strong>
-            <span className="stat-copy">
-              {projects.length > 0 ? `${projects.filter((project) => project.status === "active").length} active projects` : "No projects yet"}
-            </span>
-          </article>
-          <article className="stat-panel">
-            <span className="stat-label">Company Members</span>
-            <strong className="stat-value">{companyMembers.length}</strong>
-            <span className="stat-copy">Company-wide researcher directory and owner access roster.</span>
-          </article>
-          <article className="stat-panel">
-            <span className="stat-label">Selected Project Members</span>
-            <strong className="stat-value">{selectedProject ? members.length : 0}</strong>
-            <span className="stat-copy">{selectedProject ? `${selectedProject.name} workspace members` : "Select a project to inspect project members"}</span>
-          </article>
-          <article className="stat-panel">
-            <span className="stat-label">Selected Project Notes</span>
-            <strong className="stat-value">{selectedProject ? notes.length : 0}</strong>
-            <span className="stat-copy">{selectedProject ? "Draft, review, and completed note packages" : "Project note counts appear after project selection"}</span>
-          </article>
-        </section>
+        <HomeStats
+          notes={homeNotes}
+          projects={projects}
+          projectsReady={projectsReady}
+          notesStatus={homeNotesStatus}
+          myMemberIds={myMemberIds}
+          organisationScope={Boolean(currentUser.is_org_owner)}
+          onRetry={() => setHomeNotesAttempt((attempt) => attempt + 1)}
+        />
 
-        <section className="home-panels">
-          <article className="card home-panel">
-            <div className="section-head home-panel-head">
-              <h3>Active Projects</h3>
-              <span>Recent access order</span>
-            </div>
-            <div className="home-project-list">
-              {recentProjects.length > 0 ? (
-                recentProjects.map((project) => (
-                  <button
-                    key={project.id}
-                    type="button"
-                    className="home-project-item"
-                    onClick={() => void onOpenProjectPage(project)}
-                  >
-                    <div className="home-project-item-main">
-                      <strong>{project.name}</strong>
-                      <p>{project.description || "Open the project workspace to manage notes, members, and cover templates."}</p>
-                      <div className="home-project-tags">
-                        <span className="home-tag">Project No. {project.code || "TBD"}</span>
-                        <span className="home-tag">{formatProjectPeriod(project.start_date, project.end_date)}</span>
-                      </div>
-                    </div>
-                    <div className="home-project-item-side">
-                      <span className="home-status-pill">{project.status}</span>
-                      <span>{getCompanyMemberName(project.owner_member_id)}</span>
-                    </div>
-                  </button>
-                ))
+        <HomeQuickStart
+          notes={notesReady ? homeNotes : []}
+          notesStatus={homeNotesStatus}
+          projects={projects}
+          myMemberIds={myMemberIds}
+          projectName={projectName}
+          onOpenNote={openNote}
+          onNewNote={async (project) => {
+            if (await onOpenProjectPage(project, "notes")) openCreateNoteModal();
+          }}
+          onAiNotes={async (project) => {
+            await onOpenProjectPage(project, "ai");
+          }}
+          onManageProjects={() => setActiveSection("projects")}
+        />
+
+        {notesReady && <section className="home-todos" aria-label="내가 확인할 노트">
+          {todoGroups.map((group) => (
+            <article key={group.key} className={`card home-todo${group.items.length ? ` ${group.tone}` : " empty"}`}>
+              <div className="home-todo-head">
+                <h3>{group.title}</h3>
+                <strong>{group.items.length}</strong>
+              </div>
+              <p className="home-todo-hint">{group.hint}</p>
+              {group.items.length === 0 ? (
+                <p className="home-todo-empty">없음</p>
               ) : (
-                <div className="empty-state-card">
-                  <strong>No active projects yet</strong>
-                  <span>Create a project to open research note workspaces and member assignment flows.</span>
-                </div>
+                <ul>
+                  {group.items.slice(0, 4).map((note) => (
+                    <li key={note.id}>
+                      <button type="button" onClick={() => openNote(note)}>
+                        <strong>{note.title}</strong>
+                        <span>
+                          {projectName(note.project_id)} · {note.written_date ?? note.updated_at.slice(0, 10)}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                  {group.items.length > 4 && <li className="home-todo-more">외 {group.items.length - 4}건</li>}
+                </ul>
               )}
-            </div>
-          </article>
+            </article>
+          ))}
+        </section>}
 
-          <article className="card home-panel">
-            <div className="section-head home-panel-head">
-              <h3>Recent Activity</h3>
-              <span>Today</span>
+        <section className="card home-projects">
+          <div className="home-projects-head">
+            <h3>내 프로젝트</h3>
+            <button type="button" className="link-button" onClick={() => setActiveSection("projects")}>
+              프로젝트 관리
+            </button>
+          </div>
+          {projects.length === 0 ? (
+            <p className="home-todo-empty">아직 참여한 프로젝트가 없습니다.</p>
+          ) : (
+            <div className="table-shell">
+              <table className="admin-table home-project-table">
+                <thead>
+                  <tr>
+                    <th>프로젝트</th>
+                    <th>책임자</th>
+                    <th>이번 달 노트</th>
+                    <th>결재 대기</th>
+                    <th>반려</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {projects.map((project) => {
+                    const projectNotes = homeNotes.filter((note) => note.project_id === project.id);
+                    const month = projectNotes.filter((note) => (note.written_date ?? note.created_at).slice(0, 7) === monthKey).length;
+                    const waiting = projectNotes.filter((note) => note.status === "submitted").length;
+                    const rejected = projectNotes.filter((note) => note.status === "rejected").length;
+                    const target = project.monthly_note_target ?? 0;
+                    return (
+                      <tr key={project.id} onClick={() => void onOpenProjectPage(project)} className="home-project-row">
+                        <td>
+                          <button type="button" className="link-button" onClick={(event) => {
+                            event.stopPropagation();
+                            void onOpenProjectPage(project);
+                          }}>{project.name}</button>
+                          <span className={`pd-status status-${project.status}`}>{projectStatusLabel(project.status)}</span>
+                        </td>
+                        <td>{getCompanyMemberName(project.owner_member_id) || "-"}</td>
+                        <td>
+                          {notesReady ? month : "—"}
+                          {notesReady && target > 0 && <span className="home-target"> / {target}</span>}
+                        </td>
+                        <td className={notesReady && waiting ? "home-cell-warn" : ""}>{notesReady ? waiting : "—"}</td>
+                        <td className={notesReady && rejected ? "home-cell-danger" : ""}>{notesReady ? rejected : "—"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
-            <div className="activity-feed">
-              {recentActivity.map((item) => (
-                <div key={item.title} className="activity-feed-item">
-                  <div className="activity-feed-dot" />
-                  <div className="activity-feed-body">
-                    <strong>{item.title}</strong>
-                    <p>{item.body}</p>
-                    <span>{item.time}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </article>
+          )}
         </section>
       </div>
     );
   };
 
-  const renderProjectDashboard = () => (
-    <div className="project-dashboard-stack">
-      {!canManageSelectedProject && (
-        <section className="card inset-card">
-          <p className="eyebrow">Read Only</p>
-          <p className="context-copy">Only the company owner or current project lead can edit project settings.</p>
+  const renderProjectDashboard = () => {
+    const today = new Date();
+    const start = selectedProject?.start_date ? new Date(selectedProject.start_date) : null;
+    const finish = selectedProject?.end_date ? new Date(selectedProject.end_date) : null;
+    const dayMs = 24 * 60 * 60 * 1000;
+    const totalDays = start && finish ? Math.max(1, Math.round((finish.getTime() - start.getTime()) / dayMs)) : null;
+    const elapsed = start && totalDays ? Math.min(totalDays, Math.max(0, Math.round((today.getTime() - start.getTime()) / dayMs))) : null;
+    const daysLeft = finish ? Math.ceil((finish.getTime() - today.getTime()) / dayMs) : null;
+    const periodProgress = totalDays && elapsed != null ? Math.round((elapsed / totalDays) * 100) : null;
+    const waiting = notes.filter((note) => note.status === "submitted");
+    const rejected = notes.filter((note) => note.status === "rejected");
+    const openNote = (noteId: string) => {
+      setProjectView("notes");
+      void onOpenResearchNote(noteId);
+    };
+
+    return (
+    <div className="project-dashboard-stack pd">
+      <section className="card pd-header">
+        <div className="pd-header-main">
+          <div className="pd-title">
+            <h2>{selectedProject?.name || "제목 없는 프로젝트"}</h2>
+            {selectedProject && <span className={`pd-status status-${selectedProject.status}`}>{projectStatusLabel(selectedProject.status)}</span>}
+          </div>
+          <p className="pd-meta">
+            <span>{selectedProject?.code || "코드 없음"}</span>
+            <span>책임자 {getCompanyMemberName(selectedProject?.owner_member_id) || "미지정"}</span>
+            <span>{formatProjectPeriod(selectedProject?.start_date ?? null, selectedProject?.end_date ?? null)}</span>
+            <span>참여 {members.length}명</span>
+          </p>
+        </div>
+        {canManageSelectedProject && (
+          <button type="button" className="secondary-button compact-button" onClick={() => setShowProjectEditModal(true)}>
+            프로젝트 편집
+          </button>
+        )}
+      </section>
+
+      <section className="pd-kpis">
+        <article className="pd-kpi">
+          <span>이번 달 노트</span>
+          <strong>
+            {notesThisMonth}
+            {projectMonthlyGoal > 0 && <small> / {projectMonthlyGoal}</small>}
+          </strong>
+          {projectMonthlyGoal > 0 ? (
+            <div className="pd-bar"><div style={{ width: `${monthlyGoalProgress}%` }} /></div>
+          ) : (
+            <em>월 목표를 정하면 달성률이 보입니다</em>
+          )}
+        </article>
+        <button type="button" className={`pd-kpi pd-kpi-action${waiting.length ? " warn" : ""}`} onClick={() => setProjectView("notes")}>
+          <span>결재 대기</span>
+          <strong>{waiting.length}</strong>
+          <em>{waiting.length ? "승인이 필요한 노트" : "대기 중인 노트 없음"}</em>
+        </button>
+        <button type="button" className={`pd-kpi pd-kpi-action${rejected.length ? " danger" : ""}`} onClick={() => setProjectView("notes")}>
+          <span>반려됨</span>
+          <strong>{rejected.length}</strong>
+          <em>{rejected.length ? "작성자가 고쳐야 하는 노트" : "반려된 노트 없음"}</em>
+        </button>
+        <article className="pd-kpi">
+          <span>연구 기간</span>
+          <strong>
+            {daysLeft == null ? "-" : daysLeft >= 0 ? `D-${daysLeft}` : `종료 ${-daysLeft}일 지남`}
+          </strong>
+          {periodProgress != null ? (
+            <div className="pd-bar period"><div style={{ width: `${periodProgress}%` }} /></div>
+          ) : (
+            <em>기간을 정하면 진행률이 보입니다</em>
+          )}
+        </article>
+      </section>
+
+      {waiting.length > 0 && (
+        <section className="card pd-waiting">
+          <div className="pd-section-head">
+            <h4>결재 대기 노트</h4>
+            {waiting.length > 5 && (
+              <button type="button" className="link-button" onClick={() => setProjectView("notes")}>
+                전체 {waiting.length}건 보기
+              </button>
+            )}
+          </div>
+          <ul>
+            {waiting.slice(0, 5).map((note) => (
+              <li key={note.id}>
+                <button type="button" onClick={() => openNote(note.id)}>
+                  <strong>{note.title}</strong>
+                  <span>
+                    {getCompanyMemberName(note.owner_member_id) || "작성자 미상"} · {note.written_date ?? note.created_at.slice(0, 10)}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
         </section>
       )}
-      <section className="project-dashboard-hero card">
-        <div className="project-dashboard-hero-main">
-          <p className="eyebrow">Project Overview</p>
-          <h2>{selectedProject?.name || "Untitled Project"}</h2>
-          <p className="context-copy">
-            {selectedProject?.description || "Track project status, participant coverage, and research note volume from one dashboard."}
-          </p>
-          <div className="project-dashboard-tags">
-            <span className="project-dashboard-tag">
-              <span className="project-dashboard-tag-label">Project Code</span>
-              <span className="project-dashboard-tag-value">{selectedProject?.code || "-"}</span>
-            </span>
-            <span className="project-dashboard-tag">
-              <span className="project-dashboard-tag-label">Period</span>
-              <span className="project-dashboard-tag-value">
-                {formatProjectPeriod(selectedProject?.start_date ?? null, selectedProject?.end_date ?? null)}
-              </span>
-            </span>
-            <span className="project-dashboard-tag">
-              <span className="project-dashboard-tag-label">Lead</span>
-              <span className="project-dashboard-tag-value">{getCompanyMemberName(selectedProject?.owner_member_id)}</span>
-            </span>
-          </div>
-        </div>
-        <div className="project-dashboard-hero-side">
-          <div className="hero-metric-label">Current Status</div>
-          <div className="hero-metric-value project-status-value">{selectedProject?.status || "-"}</div>
-          <div className="hero-metric-copy">This project workspace reflects only participants and notes assigned to this project.</div>
-          {canManageSelectedProject && (
-            <button type="button" className="compact-button" onClick={() => setShowProjectEditModal(true)}>
-              Edit Project
-            </button>
-          )}
-        </div>
-      </section>
 
-      <section className="project-dashboard-kpis">
-        <article className="project-kpi-card">
-          <span className="project-kpi-label">Participants</span>
-          <strong className="project-kpi-value">{members.length}</strong>
-          <p className="project-kpi-copy">Assigned members</p>
-        </article>
-        <article className="project-kpi-card">
-          <span className="project-kpi-label">Research Notes</span>
-          <strong className="project-kpi-value">{notes.length}</strong>
-          <p className="project-kpi-copy">Created notes</p>
-        </article>
-        <article className="project-kpi-card">
-          <span className="project-kpi-label">GitHub Integrations</span>
-          <strong className="project-kpi-value">{githubIntegrations.length}</strong>
-          <p className="project-kpi-copy">Company repository connections</p>
-        </article>
-        <article className="project-kpi-card">
-          <span className="project-kpi-label">LLM Integration</span>
-          <strong className="project-kpi-value">Not Connected</strong>
-          <p className="project-kpi-copy">Model workflow connection placeholder</p>
-        </article>
-        <article className="project-kpi-card">
-          <span className="project-kpi-label">Collaboration Tools</span>
-          <strong className="project-kpi-value">0</strong>
-          <p className="project-kpi-copy">External collaboration apps connected</p>
-        </article>
-        <article className="project-kpi-card">
-          <span className="project-kpi-label">Monthly Goal</span>
-          <strong className="project-kpi-value">
-            {projectMonthlyGoal > 0 ? `${notesThisMonth} / ${projectMonthlyGoal}` : notesThisMonth}
-          </strong>
-          <p className="project-kpi-copy">
-            {projectMonthlyGoal > 0 ? `${monthlyGoalProgress}% of this month's note target` : "Set a monthly note target to track progress"}
-          </p>
-        </article>
-      </section>
-
-      <section className="project-dashboard-grid">
-        <article className="card">
-          <div className="section-head note-section-head">
-            <h4>Project Metrics</h4>
-            <span>Visual summary</span>
-          </div>
-          <div className="project-chart-grid">
-            <div className="project-chart-card">
-              <div className="project-chart-ring">
-                <div className="project-chart-ring-inner">
-                  <strong>{members.length}</strong>
-                  <span>Members</span>
-                </div>
-              </div>
-              <div className="project-chart-copy">
-                <strong>Participant Coverage</strong>
-                <span>Researchers currently assigned to this project workspace.</span>
-              </div>
-            </div>
-            <div className="project-chart-card">
-              <div className="project-chart-ring notes">
-                <div className="project-chart-ring-inner">
-                  <strong>{notes.length}</strong>
-                  <span>Notes</span>
-                </div>
-              </div>
-              <div className="project-chart-copy">
-                <strong>Note Volume</strong>
-                <span>Research note count currently recorded under this project.</span>
-              </div>
-            </div>
-            <div className="project-chart-card project-chart-wide">
-              <div className="project-mini-chart-row">
-                <div className="project-mini-chart-head">
-                  <strong>Project Duration</strong>
-                  <span>{formatProjectPeriod(selectedProject?.start_date ?? null, selectedProject?.end_date ?? null)}</span>
-                </div>
-                <div className="project-mini-chart-track">
-                  <div className="project-mini-chart-fill duration" style={{ width: "100%" }} />
-                </div>
-              </div>
-            </div>
-          </div>
-        </article>
-
-        <article className="card">
-          <div className="section-head note-section-head">
-            <h4>Researcher Activity Alerts</h4>
-            <span>{inactiveProjectResearchers.length} inactive</span>
-          </div>
-          <div className="project-mini-chart">
-            <div className="project-mini-chart-row">
-              <div className="project-mini-chart-head">
-                <strong>Monthly Goal Progress</strong>
-                <span>{projectMonthlyGoal > 0 ? `${monthlyGoalProgress}%` : "No target"}</span>
-              </div>
-              <div className="project-mini-chart-track">
-                <div
-                  className="project-mini-chart-fill notes"
-                  style={{ width: `${projectMonthlyGoal > 0 ? Math.max(10, monthlyGoalProgress) : 18}%` }}
-                />
-              </div>
-            </div>
-            <div className="researcher-activity-list">
-              {inactiveProjectResearchers.length === 0 ? (
-                <div className="empty-state-card compact-empty-state">
-                  <strong>No inactivity alerts</strong>
-                  <span>All assigned researchers have recent note activity within the last 7 days.</span>
-                </div>
-              ) : (
-                inactiveProjectResearchers.map((entry) => (
-                  <div key={entry.member.company_member_id} className="researcher-activity-item">
-                    <div>
-                      <strong>{entry.member.name}</strong>
-                      <span>
-                        {entry.lastActivity
-                          ? `Last update ${new Date(entry.lastActivity).toLocaleDateString()} / ${entry.noteCount} note${entry.noteCount === 1 ? "" : "s"}`
-                          : "No note activity yet"}
-                      </span>
-                    </div>
-                    <span className="home-status-pill muted">Needs update</span>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </article>
-      </section>
+      {selectedProject && <NoteActivityPanel projectId={selectedProject.id} refreshKey={notes.length} />}
 
       {showProjectEditModal && (
         <div className="modal-backdrop" onClick={() => setShowProjectEditModal(false)}>
           <section className="card note-modal project-edit-modal" onClick={(event) => event.stopPropagation()}>
             <div className="section-head">
-              <h3>Edit Project</h3>
+              <h3>프로젝트 편집</h3>
               <button type="button" className="secondary-button compact-button" onClick={() => setShowProjectEditModal(false)}>
-                Close
+                닫기
               </button>
             </div>
             <form
@@ -2394,30 +2608,30 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
               className="project-dashboard-form"
             >
               <label>
-                Project Name
+                프로젝트명
                 <input value={projectNameDraft} onChange={(e) => setProjectNameDraft(e.target.value)} required disabled={!canManageSelectedProject} />
               </label>
               <label>
-                Project Code
+                프로젝트 코드
                 <input value={projectCodeDraft} onChange={(e) => setProjectCodeDraft(e.target.value)} required disabled={!canManageSelectedProject} />
               </label>
               <label>
-                Lead Member
+                책임 연구원
                 <select
                   value={projectOwnerDraft}
                   onChange={(e) => setProjectOwnerDraft(e.target.value ? Number(e.target.value) : "")}
                   disabled={!canManageSelectedProject}
                 >
-                  <option value="">Select a member</option>
+                  <option value="">연구원 선택</option>
                   {companyMembers.map((member) => (
                     <option key={member.company_member_id} value={member.company_member_id}>
-                      {member.name} ({member.role})
+                      {member.name} ({roleLabel(member.role)})
                     </option>
                   ))}
                 </select>
               </label>
               <label>
-                Status
+                상태
                 <select value={projectStatusDraft} onChange={(e) => setProjectStatusDraft(e.target.value)} disabled={!canManageSelectedProject}>
                   {projectStatusOptions.map((option) => (
                     <option key={option.value} value={option.value}>
@@ -2427,15 +2641,15 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
                 </select>
               </label>
               <label>
-                Start Date
+                시작일
                 <input type="date" value={projectStartDateDraft} onChange={(e) => setProjectStartDateDraft(e.target.value)} disabled={!canManageSelectedProject} />
               </label>
               <label>
-                End Date
+                종료일
                 <input type="date" value={projectEndDateDraft} onChange={(e) => setProjectEndDateDraft(e.target.value)} disabled={!canManageSelectedProject} />
               </label>
               <label>
-                Monthly Note Target
+                월간 노트 목표
                 <input
                   type="number"
                   min="0"
@@ -2445,7 +2659,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
                 />
               </label>
               <label className="project-dashboard-wide">
-                Description
+                설명
                 <textarea
                   rows={5}
                   value={projectDescriptionDraft}
@@ -2455,7 +2669,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
               </label>
               <div className="project-dashboard-actions">
                 <button type="submit" className="compact-button" disabled={!canManageSelectedProject}>
-                  Save Project
+                  프로젝트 저장
                 </button>
               </div>
             </form>
@@ -2463,23 +2677,26 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
         </div>
       )}
     </div>
-  );
+    );
+  };
 
   const renderProjectMembers = () => (
     <div className="user-stack">
       {!canManageSelectedProject && (
         <section className="card page-intro">
-          <p className="eyebrow">Read Only</p>
+          <p className="eyebrow">읽기 전용</p>
           <p className="context-copy">
-            You can view the assigned project researchers, but only the company owner or current project lead can change participation.
+            배정된 연구원을 볼 수 있지만, 참여 변경은 기관 관리자나 프로젝트 책임자만 할 수 있습니다.
           </p>
         </section>
       )}
 
+      {selectedProject && <NoteActivityPanel projectId={selectedProject.id} refreshKey={notes.length + members.length} />}
+
       <section className="card">
         <div className="section-head note-section-head">
-          <h4>Add Project Researcher</h4>
-          <span>{availableProjectResearchers.length} available</span>
+          <h4>프로젝트 연구원 추가</h4>
+          <span>추가 가능 {availableProjectResearchers.length}명</span>
         </div>
         <form onSubmit={onAssignMember} className="form-inline">
           <select
@@ -2487,28 +2704,30 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
             onChange={(e) => setMemberId(e.target.value ? Number(e.target.value) : "")}
             disabled={!canManageSelectedProject}
           >
-            <option value="">Select a company researcher</option>
+            <option value="">기관 연구원 선택</option>
             {availableProjectResearchers.map((member) => (
               <option key={member.company_member_id} value={member.company_member_id}>
-                {member.name} ({member.role})
+                {member.name} ({roleLabel(member.role)})
               </option>
             ))}
           </select>
-          <input
-            value={memberRole}
-            onChange={(e) => setMemberRole(e.target.value)}
-            placeholder="project role"
-            disabled={!canManageSelectedProject}
-          />
+          <select value={memberRole} onChange={(e) => setMemberRole(e.target.value)} disabled={!canManageSelectedProject} aria-label="프로젝트 역할">
+            {PROJECT_ROLE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+            {!PROJECT_ROLE_OPTIONS.some((option) => option.value === memberRole) && <option value={memberRole}>{memberRole}</option>}
+          </select>
           <button type="submit" className="compact-button" disabled={!canManageSelectedProject || memberId === ""}>
-            Add Researcher
+            연구원 추가
           </button>
         </form>
       </section>
 
       <section className="card">
         <div className="section-head note-section-head">
-          <h4>Current Project Researchers</h4>
+          <h4>현재 프로젝트 연구원</h4>
           <span>{projectResearchers.length}</span>
         </div>
         <ul className="list">
@@ -2519,20 +2738,66 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
                 <div>
                   <strong>{member.name}</strong>
                   <span>
-                    {member.email} / project role: {isLead ? "lead" : member.role} / {member.is_active ? "active" : "inactive"}
+                    {member.email} / 프로젝트 역할: {isLead ? "책임자" : roleLabel(member.role)} / {member.is_active ? "활성" : "비활성"}
+                    {" / "}
+                    {companyMembers.find((item) => item.company_member_id === member.company_member_id)?.signature_data_url ? (
+                      <b className="member-sign ok">서명 등록됨</b>
+                    ) : (
+                      <b className="member-sign missing">서명 미등록</b>
+                    )}
                   </span>
                 </div>
                 {isLead ? (
-                  <span className="project-pill">Lead</span>
+                  <span className="project-pill">책임자</span>
                 ) : (
                   canManageSelectedProject && (
-                    <button
-                      type="button"
-                      className="secondary-button compact-button"
-                      onClick={() => void onRemoveAssignedMember(member.company_member_id)}
-                    >
-                      Remove
-                    </button>
+                    <span className="member-actions">
+                      <select
+                        value={member.role}
+                        aria-label={`${member.name} 역할`}
+                        onChange={(event) => {
+                          if (!selectedProject) return;
+                          void assignProjectMember(selectedProject.id, member.company_member_id, event.target.value)
+                            .then(() => getProjectMembers(selectedProject.id))
+                            .then(setMembers)
+                            .catch((err: Error) => setError(err.message));
+                        }}
+                      >
+                        {PROJECT_ROLE_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                        {!PROJECT_ROLE_OPTIONS.some((option) => option.value === member.role) && (
+                          <option value={member.role}>{roleLabel(member.role)}</option>
+                        )}
+                      </select>
+                      <button
+                        type="button"
+                        className="secondary-button compact-button"
+                        onClick={() => {
+                          if (!selectedProject || !window.confirm(`${member.name}님을 이 프로젝트 책임자로 지정할까요?`)) return;
+                          void updateProject(selectedProject.id, { owner_member_id: member.company_member_id })
+                            .then((updated) => {
+                              warnIfLeadHasNoSignature(member.company_member_id, updated.name);
+                              setSelectedProject(updated);
+                              setProjects((items) => items.map((item) => (item.id === updated.id ? updated : item)));
+                              // The previous lead becomes a regular member on the server; reload to show it.
+                              return getProjectMembers(updated.id).then(setMembers);
+                            })
+                            .catch((err: Error) => setError(err.message));
+                        }}
+                      >
+                        책임자로 지정
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button compact-button"
+                        onClick={() => void onRemoveAssignedMember(member.company_member_id)}
+                      >
+                        제외
+                      </button>
+                    </span>
                   )
                 )}
               </li>
@@ -2551,15 +2816,73 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
       const matchesType = noteFileTypeFilter === "all" || file.file_type === noteFileTypeFilter;
       return matchesQuery && matchesType;
     });
+    if (noteCreateFiles && selectedProject) {
+      return (
+        <NoteCreatePage
+          key={selectedProject.id}
+          projectId={selectedProject.id}
+          projectName={selectedProject.name}
+          members={companyMembers.map((member) => ({ id: member.company_member_id, name: `${member.name} (${roleLabel(member.role)})` }))}
+          defaultAuthorId={defaultNoteAuthorMemberId}
+          defaultReviewerId={defaultNoteReviewerMemberId}
+          today={todayIso}
+          initialFiles={noteCreateFiles}
+          currentUserId={currentUser.id}
+          onCancel={() => setNoteCreateFiles(null)}
+          onCreated={(noteId, message) => {
+            setNoteCreateFiles(null);
+            setNoteNotice(message);
+            setSelectedNoteIds([]);
+            // Opens the new note once the refreshed list contains it (not when a PDF made several).
+            pendingSearchNoteId.current = noteId;
+            // A note made while a bundle is open goes into that bundle.
+            const openBundle = noteBundles.find((bundle) => bundle.id === bundleFilter);
+            const projectId = selectedProject.id;
+            void (async () => {
+              if (openBundle && noteId) {
+                await moveNotesToBundle(projectId, [noteId], openBundle.id).catch(() => undefined);
+              }
+              await refreshNotes(projectId);
+            })();
+          }}
+        />
+      );
+    }
+    if (bulkUploadFiles && selectedProject) {
+      return (
+        <BulkUploadEditor
+          key={selectedProject.id}
+          projectId={selectedProject.id}
+          initialItems={bulkUploadFiles}
+          members={companyMembers.map((member) => ({ id: member.company_member_id, name: member.name }))}
+          defaultAuthorId={defaultNoteAuthorMemberId}
+          defaultReviewerId={defaultNoteReviewerMemberId}
+          currentUserId={currentUser.id}
+          onClose={(createdAny) => {
+            setBulkUploadFiles(null);
+            if (createdAny) {
+              setNoteNotice("여러 파일로 연구노트를 만들었습니다.");
+              void refreshNotes(selectedProject.id);
+            }
+          }}
+        />
+      );
+    }
     return (
       <div className="note-management-shell">
+        {showBatchGenerator && selectedProject && <BatchNoteGenerator
+          key={selectedProject.id} projectId={selectedProject.id} companyId={selectedProject.company_id}
+          userId={currentUser.id} notes={notes} onClose={() => setShowBatchGenerator(false)}
+          onRefresh={() => void refreshNotes(selectedProject.id)}
+          onOpenNote={(id) => { setShowBatchGenerator(false); void onOpenResearchNote(id); }}
+        />}
         {isBatchDownloading && (
           <section className="card page-intro">
-            <p className="eyebrow">Download Progress</p>
+            <p className="eyebrow">다운로드 진행률</p>
             <div className="download-progress">
               <div className="download-progress-head">
-                <strong>Merging selected research notes</strong>
-                <span>{batchDownloadProgress == null ? "Preparing..." : `${batchDownloadProgress}%`}</span>
+                <strong>선택한 연구노트를 합치는 중</strong>
+                <span>{batchDownloadProgress == null ? "준비 중..." : `${batchDownloadProgress}%`}</span>
               </div>
               <div className="download-progress-bar">
                 <div
@@ -2573,54 +2896,110 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
 
         {noteNotice && (
           <section className="card page-intro">
-            <p className="eyebrow">Notice</p>
+            <p className="eyebrow">알림</p>
             <p>{noteNotice}</p>
           </section>
         )}
 
-        <section className="card note-files-panel">
-          <div className="section-head note-section-head">
-            <div>
-              <h4>Research File Dropzone</h4>
-              <p className="context-copy">
-                Every uploaded PDF or image starts a new research note with the selected files already attached.
-              </p>
-            </div>
-          </div>
-
+        <section
+          className={`note-upload-strip${isNoteFileDragging ? " dragging" : ""}`}
+          onDragOver={(event) => {
+            event.preventDefault();
+            setIsNoteFileDragging(true);
+          }}
+          onDragLeave={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsNoteFileDragging(false);
+          }}
+          onDrop={(event) => void onResearchFileDrop(event)}
+        >
           <input
             ref={noteUploadInputRef}
             type="file"
             accept="application/pdf,image/*"
             multiple
             className="hidden-input"
-            onChange={(e) => queueResearchFilesForNewNote(Array.from(e.target.files ?? []))}
+            onChange={(e) => {
+              queueResearchFilesForNewNote(itemsFromFileList(e.target.files ?? []));
+              e.target.value = "";
+            }}
+          />
+          <input
+            ref={noteFolderInputRef}
+            type="file"
+            multiple
+            className="hidden-input"
+            {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
+            onChange={(e) => {
+              queueResearchFilesForNewNote(itemsFromFileList(e.target.files ?? []));
+              e.target.value = "";
+            }}
           />
 
-          <button
-            type="button"
-            className={`note-upload-dropzone${isNoteFileDragging ? " dragging" : ""}`}
-            onDragOver={(event) => {
-              event.preventDefault();
-              setIsNoteFileDragging(true);
-            }}
-            onDragLeave={() => setIsNoteFileDragging(false)}
-            onDrop={(event) => void onResearchFileDrop(event)}
-            onClick={() => noteUploadInputRef.current?.click()}
-          >
-              <strong>Drag files here to create a new research note from the uploaded files.</strong>
-            <span>Supported: PDF and image files.</span>
-          </button>
+          <div className="note-upload-strip-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 16V4" />
+              <path d="m6 10 6-6 6 6" />
+              <path d="M4 20h16" />
+            </svg>
+          </div>
+          <div className="note-upload-strip-text">
+            <strong>{isNoteFileDragging ? "여기에 놓으면 새 연구노트를 만듭니다" : "파일로 새 연구노트 만들기"}</strong>
+            <span>PDF·이미지나 폴더를 끌어다 놓으세요. 여러 개는 한 번에 정리해서 올리고, PDF는 여러 노트로 나눌 수 있습니다.</span>
+          </div>
+          <div className="note-upload-strip-actions">
+            <button type="button" className="secondary-button compact-button" onClick={() => noteUploadInputRef.current?.click()}>
+              파일 고르기
+            </button>
+            <button type="button" className="secondary-button compact-button" onClick={() => noteFolderInputRef.current?.click()}>
+              폴더 올리기
+            </button>
+          </div>
         </section>
 
         <section className="card">
           <div className="section-head note-section-head">
-            <h4>Research Note List</h4>
+            <h4>연구노트 목록</h4>
             <span>
-              {notes.length}
-              {totalNotePages > 1 ? ` / Page ${notesPage} of ${totalNotePages}` : ""}
+              {visibleNotes.length}
+              {totalNotePages > 1 ? ` / ${notesPage} / ${totalNotePages}페이지` : ""}
             </span>
           </div>
+          {selectedProject && (
+            <NoteBundleBar
+              projectId={selectedProject.id}
+              bundles={noteBundles}
+              notes={notes}
+              active={bundleFilter}
+              onSelect={setBundleFilter}
+              onChanged={(next) => {
+                if (next) setBundleFilter(next);
+                void refreshNotes(selectedProject.id);
+              }}
+            />
+          )}
+          {isNoteSelectionMode && noteBundles.length > 0 && (
+            <div className="note-bundle-move">
+              <span>선택한 노트 {selectedNoteIds.length}개를</span>
+              <select
+                value=""
+                disabled={selectedNoteIds.length === 0}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  if (!value) return;
+                  void onMoveNotesToBundle(selectedNoteIds, value === "__none" ? null : value);
+                }}
+                aria-label="선택한 노트를 옮길 묶음"
+              >
+                <option value="">묶음으로 옮기기…</option>
+                {noteBundles.map((bundle) => (
+                  <option key={bundle.id} value={bundle.id}>
+                    {bundle.name}
+                  </option>
+                ))}
+                <option value="__none">묶음에서 빼기</option>
+              </select>
+            </div>
+          )}
           <div className="table-shell">
             <table className="admin-table note-file-table">
               <thead>
@@ -2631,25 +3010,29 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
                         type="checkbox"
                         checked={paginatedNotes.length > 0 && paginatedNotes.every((note) => selectedNoteIds.includes(note.id))}
                         onChange={onToggleAllNoteSelections}
-                        aria-label="Select all research notes on this page"
+                        aria-label="이 페이지의 연구노트 모두 선택"
                       />
                     </th>
                   )}
-                  <th>Title</th>
-                  <th>Has Layout</th>
-                  <th>Status</th>
-                  <th>Author</th>
-                  <th>Written Date</th>
-                  <th>Action</th>
+                  <th className="note-no-col">No.</th>
+                  <th>제목</th>
+                  {noteBundles.length > 0 && <th>묶음</th>}
+                  <th>레이아웃</th>
+                  <th>상태</th>
+                  <th>작성자</th>
+                  <th>작성일</th>
+                  <th>작업</th>
                 </tr>
               </thead>
               <tbody>
-                {notes.length === 0 && (
+                {visibleNotes.length === 0 && (
                   <tr>
-                    <td colSpan={isNoteSelectionMode ? 7 : 6}>No research notes yet.</td>
+                    <td colSpan={(isNoteSelectionMode ? 8 : 7) + (noteBundles.length > 0 ? 1 : 0)}>
+                      {notes.length === 0 ? "아직 연구노트가 없습니다." : "이 묶음에는 아직 노트가 없습니다."}
+                    </td>
                   </tr>
                 )}
-                {paginatedNotes.map((note) => (
+                {paginatedNotes.map((note, index) => (
                   <tr
                     key={note.id}
                     onClick={() => {
@@ -2666,12 +3049,31 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
                           type="checkbox"
                           checked={selectedNoteIds.includes(note.id)}
                           onChange={() => onToggleNoteSelection(note.id)}
-                          aria-label={`Select ${note.title}`}
+                          aria-label={`${note.title} 선택`}
                         />
                       </td>
                     )}
+                    {/* Newest first, numbered from the oldest note (No. 1). */}
+                    <td className="note-no-col">{visibleNotes.length - ((notesPage - 1) * notesPerPage + index)}</td>
                     <td>{note.title}</td>
-                    <td>{noteLayoutStatus[note.id] ? "Saved" : "Auto"}</td>
+                    {noteBundles.length > 0 && (
+                      <td onClick={(event) => event.stopPropagation()}>
+                        <select
+                          className="note-bundle-select"
+                          value={note.bundle_id ?? ""}
+                          onChange={(event) => void onMoveNotesToBundle([note.id], event.target.value || null)}
+                          aria-label={`${note.title} 묶음`}
+                        >
+                          <option value="">—</option>
+                          {noteBundles.map((bundle) => (
+                            <option key={bundle.id} value={bundle.id}>
+                              {bundle.name}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                    )}
+                    <td>{noteLayoutStatus[note.id] ? "저장됨" : "자동"}</td>
                     <td>
                       <span className={`note-status-badge status-${note.status}`}>
                         {noteStatusLabels[note.status] ?? note.status}
@@ -2685,7 +3087,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
                         className="secondary-button compact-button"
                         onClick={() => void onDeleteResearchNote(note.id)}
                       >
-                        Delete
+                        삭제
                       </button>
                     </td>
                   </tr>
@@ -2701,7 +3103,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
                 onClick={() => setNotesPage((current) => Math.max(1, current - 1))}
                 disabled={notesPage === 1}
               >
-                Previous
+                이전
               </button>
               <div className="table-pagination-pages">
                 {Array.from({ length: totalNotePages }, (_, index) => index + 1).map((page) => (
@@ -2721,7 +3123,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
                 onClick={() => setNotesPage((current) => Math.min(totalNotePages, current + 1))}
                 disabled={notesPage === totalNotePages}
               >
-                Next
+                다음
               </button>
             </div>
           )}
@@ -2732,24 +3134,30 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
             <section className="card note-workspace-modal" onClick={(event) => event.stopPropagation()}>
               <div className="section-head">
                 <div>
-                  <p className="eyebrow">Research Note Workspace</p>
+                  <p className="eyebrow">연구노트 작업 공간</p>
                   <h3>{selectedNote.title}</h3>
                 </div>
                 <div className="note-file-actions">
                   <button type="button" className="secondary-button compact-button" onClick={onBackToResearchNoteList}>
-                    Close
+                    닫기
                   </button>
                   <button type="button" className="compact-button" onClick={openEditNoteModal} disabled={selectedNoteIsLocked}>
-                    Edit Note
+                    노트 편집
                   </button>
                 </div>
               </div>
 
               <div className="note-main-stack">
+                <AiReviewBanner
+                  noteId={selectedNote.id}
+                  noteStatus={selectedNote.status}
+                  canConfirm={canManageSelectedProject || selectedNoteIsAuthor}
+                  onChange={setAiReview}
+                />
                 <section className="note-approval-panel">
                   <div className="note-approval-summary">
                     <div>
-                      <p className="eyebrow">Approval Workflow</p>
+                      <p className="eyebrow">결재 진행</p>
                       <h4>
                         <span className={`note-status-badge status-${selectedNote.status}`}>
                           {selectedNoteStatusLabel}
@@ -2757,20 +3165,20 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
                       </h4>
                     </div>
                     <div className="note-approval-meta">
-                      <span>Author: {getCompanyMemberName(selectedNote.owner_member_id)}</span>
-                      <span>Reviewer: {getCompanyMemberName(selectedNote.reviewer_member_id)}</span>
-                      <span>Revision: {activeNoteDocument?.current_revision_no ?? "-"}</span>
+                      <span>작성자: {getCompanyMemberName(selectedNote.owner_member_id)}</span>
+                      <span>검토자: {getCompanyMemberName(selectedNote.reviewer_member_id)}</span>
+                      <span>리비전: {activeNoteDocument?.current_revision_no ?? "-"}</span>
                     </div>
                   </div>
 
                   <div className="note-approval-actions">
                     <label className="note-approval-comment">
-                      Comment
+                      의견
                       <textarea
                         value={approvalComment}
                         onChange={(event) => setApprovalComment(event.target.value)}
                         rows={3}
-                        placeholder="Optional for submit/approve. Required for reject/reopen."
+                        placeholder="제출·승인 시 선택, 반려·재개 시 필수입니다."
                       />
                     </label>
                     <div className="note-approval-button-row">
@@ -2779,8 +3187,9 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
                         className="secondary-button compact-button"
                         onClick={() => void runSelectedNoteApprovalAction("submit")}
                         disabled={!canSubmitSelectedNote}
+                        title={aiReview?.required && !aiReview.reviewed ? "AI 작성 내용을 검토 완료해야 제출할 수 있습니다" : undefined}
                       >
-                        Submit
+                        제출
                       </button>
                       <button
                         type="button"
@@ -2788,7 +3197,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
                         onClick={() => void runSelectedNoteApprovalAction("approve")}
                         disabled={!canReviewSelectedNote}
                       >
-                        Approve
+                        승인
                       </button>
                       <button
                         type="button"
@@ -2796,7 +3205,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
                         onClick={() => void runSelectedNoteApprovalAction("reject")}
                         disabled={!canReviewSelectedNote}
                       >
-                        Reject
+                        반려
                       </button>
                       <button
                         type="button"
@@ -2804,14 +3213,14 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
                         onClick={() => void runSelectedNoteApprovalAction("reopen")}
                         disabled={!canReopenSelectedNote}
                       >
-                        Reopen
+                        재개
                       </button>
                     </div>
                   </div>
 
                   <div className="note-approval-events">
                     {approvalEvents.length === 0 ? (
-                      <span>No approval events yet.</span>
+                      <span>아직 결재 이력이 없습니다.</span>
                     ) : (
                       approvalEvents.map((event) => (
                         <div key={event.id} className="note-approval-event">
@@ -2837,8 +3246,10 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
                   onSaveDocument={onSaveNoteDocument}
                   onUploadNoteFiles={onUploadFilesToSelectedNote}
                   onReplaceReferencePage={onReplaceNotePageAsset}
+                  onEditNoteDetails={openEditNoteModal}
+                  noteFormat={noteFormat}
                   isLocked={selectedNoteIsLocked}
-                  lockMessage={`${selectedNoteStatusLabel} research notes are locked for editing.`}
+                  lockMessage={`${selectedNoteStatusLabel} 상태의 연구노트는 편집할 수 없습니다.`}
                 />
               </div>
             </section>
@@ -2849,62 +3260,62 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
           <div className="modal-backdrop" onClick={() => setShowNoteModal(false)}>
             <section className="card note-modal" onClick={(event) => event.stopPropagation()}>
               <div className="section-head">
-                <h3>{noteModalMode === "edit" ? "Edit Research Note" : "Create Research Note"}</h3>
+                <h3>{noteModalMode === "edit" ? "연구노트 편집" : "연구노트 만들기"}</h3>
                 <button type="button" className="secondary-button compact-button" onClick={() => setShowNoteModal(false)}>
-                  Close
+                  닫기
                 </button>
               </div>
               <form onSubmit={noteModalMode === "edit" ? onSaveNote : onCreateNote} className="form-stack">
                 <label>
-                  Title
+                  제목
                   <input value={noteTitle} onChange={(e) => setNoteTitle(e.target.value)} required />
                 </label>
                 <label>
-                  Author
+                  작성자
                   <select
                     value={noteOwnerMemberId}
                     onChange={(e) => setNoteOwnerMemberId(e.target.value ? Number(e.target.value) : "")}
                   >
-                    <option value="">Select a member</option>
+                    <option value="">연구원 선택</option>
                     {companyMembers.map((member) => (
                       <option key={member.company_member_id} value={member.company_member_id}>
-                        {member.name} ({member.role})
+                        {member.name} ({roleLabel(member.role)})
                       </option>
                     ))}
                   </select>
                 </label>
                 <label>
-                  Written Date
+                  작성일
                   <input type="date" value={noteWrittenDate} onChange={(e) => setNoteWrittenDate(e.target.value)} />
                 </label>
                 <label>
-                  Reviewer
+                  검토자
                   <select
                     value={noteReviewerMemberId}
                     onChange={(e) => setNoteReviewerMemberId(e.target.value ? Number(e.target.value) : "")}
                   >
-                    <option value="">Select a member</option>
+                    <option value="">연구원 선택</option>
                     {companyMembers.map((member) => (
                       <option key={member.company_member_id} value={member.company_member_id}>
-                        {member.name} ({member.role})
+                        {member.name} ({roleLabel(member.role)})
                       </option>
                     ))}
                   </select>
                 </label>
                 <label>
-                  Reviewed Date
+                  검토일
                   <input type="date" value={noteReviewedDate} onChange={(e) => setNoteReviewedDate(e.target.value)} />
                 </label>
                   {noteModalMode === "create" && (
                   <>
                     <div className="section-head">
-                      <h4>Attach File</h4>
+                      <h4>파일 첨부</h4>
                       <button
                         type="button"
                         className="secondary-button compact-button"
                         onClick={() => noteCreateUploadInputRef.current?.click()}
                       >
-                        Choose File
+                        파일 선택
                       </button>
                     </div>
                     <input
@@ -2932,18 +3343,18 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
                     >
                       <strong>
                         {pendingNoteFiles.length > 0
-                          ? `${pendingNoteFiles.length} file(s) ready to attach`
-                          : "Drop files here to attach them to the new research note."}
+                          ? `첨부할 파일 ${pendingNoteFiles.length}개`
+                          : "새 연구노트에 첨부할 파일을 여기에 놓으세요."}
                       </strong>
                       <span>
                         {pendingNoteFiles.length > 0
                           ? pendingNoteFiles.map((file) => file.name).join(", ")
-                          : "You can drag and drop files here or choose them manually."}
+                          : "파일을 여기로 끌어다 놓거나 직접 선택하세요."}
                       </span>
                     </button>
                   </>
                 )}
-                <button type="submit">{noteModalMode === "edit" ? "Save Note" : "Create Note"}</button>
+                <button type="submit">{noteModalMode === "edit" ? "노트 저장" : "노트 만들기"}</button>
               </form>
             </section>
           </div>
@@ -2953,132 +3364,19 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
   };
 
   const renderProjectCover = () => {
-    const resolvedCoverTemplate = resolveCoverTemplate(
-      coverTemplate,
-      selectedProject,
-      getCompanyMemberName(selectedProject?.owner_member_id),
-      researcherManagement?.company.name ?? "LABNOTE"
-    );
+    const managerName = getCompanyMemberName(selectedProject?.owner_member_id);
+    const companyName = researcherManagement?.company.name ?? "LABNOTE";
     return (
-        <>
-          <div className="section-head project-tab-actions">
-            <div />
-            <button type="button" className="secondary-button compact-button" onClick={() => setProjectView("notes")}>
-              Back to Research Note
-            </button>
-          </div>
-            <form onSubmit={onSaveProjectCover} className="project-dashboard-form">
-              <div className="cover-preview a4-preview project-dashboard-wide cover-preview-stack">
-                <div className="a4-sheet a4-sheet-simple cover-sheet-canvas">
-                  {coverPreviewImageUrl ? (
-                  <img src={coverPreviewImageUrl} alt="Cover preview" className="cover-sheet-image" />
-                ) : (
-                  <div className="cover-sheet-placeholder">Preparing cover preview...</div>
-                )}
-              </div>
-
-                <div className="a4-sheet a4-sheet-simple cover-sheet-canvas">
-                  {tocPreviewImageUrl ? (
-                    <img src={tocPreviewImageUrl} alt="Table of contents preview" className="cover-sheet-image" />
-                  ) : (
-                    <div className="cover-sheet-placeholder">Preparing table of contents preview...</div>
-                  )}
-                </div>
-              </div>
-              <div className="project-dashboard-wide cover-settings-card">
-                <div className="section-head note-section-head">
-                  <h4>Cover Fields</h4>
-                  <span>Use project defaults unless a field needs a stored override.</span>
-                </div>
-                <div className="table-shell cover-settings-shell">
-                  <table className="admin-table cover-settings-table">
-                    <thead>
-                      <tr>
-                        <th>Field</th>
-                        <th>Project Default</th>
-                        <th>Override</th>
-                        <th>Custom Value</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr>
-                        <td>Research Organization</td>
-                        <td>{buildDefaultCoverTemplate(selectedProject, getCompanyMemberName(selectedProject?.owner_member_id), researcherManagement?.company.name ?? "LABNOTE").organization}</td>
-                        <td>
-                          <input
-                            type="checkbox"
-                            checked={coverTemplate.overrideOrganization}
-                            onChange={(e) => setCoverTemplate((current) => ({ ...current, overrideOrganization: e.target.checked }))}
-                          />
-                        </td>
-                        <td>
-                          <input
-                            value={coverTemplate.organization}
-                            onChange={(e) => setCoverTemplate((current) => ({ ...current, organization: e.target.value }))}
-                            disabled={!coverTemplate.overrideOrganization}
-                          />
-                        </td>
-                      </tr>
-                      <tr>
-                        <td>Project Title</td>
-                        <td>{buildDefaultCoverTemplate(selectedProject, getCompanyMemberName(selectedProject?.owner_member_id), researcherManagement?.company.name ?? "LABNOTE").projectTitle}</td>
-                        <td>
-                          <input
-                            type="checkbox"
-                            checked={coverTemplate.overrideProjectTitle}
-                            onChange={(e) => setCoverTemplate((current) => ({ ...current, overrideProjectTitle: e.target.checked }))}
-                          />
-                        </td>
-                        <td>
-                          <input
-                            value={coverTemplate.projectTitle}
-                            onChange={(e) => setCoverTemplate((current) => ({ ...current, projectTitle: e.target.value }))}
-                            disabled={!coverTemplate.overrideProjectTitle}
-                          />
-                        </td>
-                      </tr>
-                      <tr>
-                        <td>Principal Investigator</td>
-                        <td>{buildDefaultCoverTemplate(selectedProject, getCompanyMemberName(selectedProject?.owner_member_id), researcherManagement?.company.name ?? "LABNOTE").principalInvestigator}</td>
-                        <td>
-                          <input
-                            type="checkbox"
-                            checked={coverTemplate.overridePrincipalInvestigator}
-                            onChange={(e) =>
-                              setCoverTemplate((current) => ({ ...current, overridePrincipalInvestigator: e.target.checked }))
-                            }
-                          />
-                        </td>
-                        <td>
-                          <input
-                            value={coverTemplate.principalInvestigator}
-                            onChange={(e) => setCoverTemplate((current) => ({ ...current, principalInvestigator: e.target.value }))}
-                            disabled={!coverTemplate.overridePrincipalInvestigator}
-                          />
-                        </td>
-                      </tr>
-                      <tr>
-                        <td>Project Code</td>
-                        <td>{selectedProject?.code || "-"}</td>
-                        <td>-</td>
-                        <td>Uses project data</td>
-                      </tr>
-                      <tr>
-                        <td>Period</td>
-                        <td>{selectedProject ? `${selectedProject.start_date ?? "TBD"} - ${selectedProject.end_date ?? "TBD"}` : "-"}</td>
-                        <td>-</td>
-                        <td>Uses project data</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-              <div className="project-dashboard-actions">
-                <button type="submit" className="compact-button">Save Cover</button>
-              </div>
-            </form>
-          </>
-      );
+      <CoverTemplateSettings
+        template={coverTemplate}
+        saved={parseCoverTemplate(projectCover?.template_payload ?? null, selectedProject, managerName, companyName)}
+        defaults={buildDefaultCoverTemplate(selectedProject, managerName, companyName)}
+        previewUrl={coverPreviewImageUrl}
+        tocPreviewUrl={tocPreviewImageUrl}
+        onChange={setCoverTemplate}
+        onSave={() => onSaveProjectCover()}
+      />
+    );
   };
 
   const renderProjects = () => (
@@ -3086,537 +3384,128 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
       {showCreateProjectForm && (
         <section className="card project-create-panel">
           <div className="section-head">
-            <h3>Create Project</h3>
-            <span>Projects are created inside the current organization automatically.</span>
+            <h3>프로젝트 만들기</h3>
+            <span>프로젝트는 현재 기관 안에 자동으로 만들어집니다.</span>
           </div>
           <form onSubmit={onCreateProject} className="project-create-form">
             <label>
-              Project Name
+              프로젝트명
               <input value={name} onChange={(e) => setName(e.target.value)} required />
             </label>
             <label>
-              Lead Member
+              책임 연구원
               <select value={ownerMemberId} onChange={(e) => setOwnerMemberId(e.target.value ? Number(e.target.value) : "")}>
-                <option value="">Select a member</option>
+                <option value="">연구원 선택</option>
                 {companyMembers.map((member) => (
                   <option key={member.company_member_id} value={member.company_member_id}>
-                    {member.name} ({member.role})
+                    {member.name} ({roleLabel(member.role)})
                   </option>
                 ))}
               </select>
             </label>
             <label>
-              Project Number
+              과제번호
               <input value={code} onChange={(e) => setCode(e.target.value)} required />
             </label>
             <label>
-              Start Date
+              시작일
               <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
             </label>
             <label>
-              End Date
+              종료일
               <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
             </label>
             <label>
-              Monthly Note Target
+              월간 노트 목표
               <input type="number" min="0" value={monthlyNoteTarget} onChange={(e) => setMonthlyNoteTarget(e.target.value)} />
             </label>
             <label className="project-create-wide">
-              Description
+              설명
               <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={4} />
             </label>
             <div className="project-create-actions">
               <button type="submit" className="compact-button">
-                Save Project
+                프로젝트 저장
               </button>
             </div>
           </form>
         </section>
       )}
 
-      <section className="card">
-        <div className="section-head">
-          <h3>All Projects</h3>
-          <div className="table-actions">
-            <span className="section-count">{projects.length} projects</span>
-            <button type="button" className="compact-button" onClick={() => setShowCreateProjectForm((open) => !open)}>
-              {showCreateProjectForm ? "Close Create" : "Create Project"}
-            </button>
-          </div>
+      <section className="card project-list-card">
+        <div className="section-head project-list-head">
+          <h3>
+            전체 프로젝트 <span className="project-list-count">{projects.length}</span>
+          </h3>
+          <button type="button" className="compact-button" onClick={() => setShowCreateProjectForm((open) => !open)}>
+            {showCreateProjectForm ? "만들기 닫기" : "+ 프로젝트 만들기"}
+          </button>
         </div>
-        <div className="project-card-grid">
-          {projects.map((project) => (
-            <button
-              key={project.id}
-              type="button"
-              className={`project-card${selectedProject?.id === project.id ? " selected" : ""}`}
-              onClick={() => void onOpenProjectPage(project)}
-            >
-              <div className="project-card-top">
-                <span className="project-icon">N</span>
-                <span className="project-star">{selectedProject?.id === project.id ? "*" : "+"}</span>
-              </div>
-              <strong>{project.name}</strong>
-              <div className="project-meta">
-                <span>Lead</span>
-                <strong>{getCompanyMemberName(project.owner_member_id)}</strong>
-                <span>Project No.</span>
-                <strong>{project.code}</strong>
-                <span>Period</span>
-                <strong>{formatProjectPeriod(project.start_date, project.end_date)}</strong>
-              </div>
-              <div className="project-card-footer">
-                <span className="project-pill">company</span>
-                <span className="project-pill muted">{project.status}</span>
-                <span className="project-count">{project.description ? "described" : "no description"}</span>
-              </div>
-            </button>
-          ))}
-        </div>
-      </section>
-    </div>
-  );
-
-  const renderGitHubIntegration = () => (
-    <div className="user-stack github-workspace">
-      <section className="github-action-strip">
-        <article className="card github-action-card">
-          <span className="section-count">{githubIntegrations.length} repositories</span>
-          <h3>Connected Repositories</h3>
-          <p className="context-copy">Register GitHub repositories and manage webhook access.</p>
-          <button
-            type="button"
-            className="compact-button"
-            onClick={() => setShowGitHubRepositoryModal(true)}
-            disabled={!canManageGitHubIntegrations || !currentUser.organization_id}
-          >
-            Add Repository
-          </button>
-        </article>
-
-        <article className="card github-action-card">
-          <span className="section-count">{githubProjectMappings.length} mappings</span>
-          <h3>Project Mapping</h3>
-          <p className="context-copy">Connect a repository branch flow to a LabNote project.</p>
-          <button
-            type="button"
-            className="compact-button"
-            onClick={() => setShowGitHubMappingModal(true)}
-            disabled={!canManageGitHubIntegrations || githubIntegrations.length === 0 || projects.length === 0}
-          >
-            Create Mapping
-          </button>
-        </article>
-
-        <article className="card github-action-card">
-          <span className="section-count">{githubEvents.length} events</span>
-          <h3>GitHub Events</h3>
-          <p className="context-copy">Review incoming repository events and generate research notes.</p>
-          <button type="button" className="secondary-button compact-button" onClick={() => void refreshGitHubIntegrations()}>
-            Refresh
-          </button>
-        </article>
-      </section>
-
-      <section className="github-integration-grid github-management-grid">
-        <article className="card">
-          <div className="section-head">
-            <h3>Connected Repositories</h3>
-            <div className="table-actions">
-              <span className="section-count">{githubIntegrations.length} repositories</span>
+        {projects.length === 0 ? (
+          <div className="project-list-empty">아직 프로젝트가 없습니다. ‘프로젝트 만들기’로 첫 프로젝트를 만드세요.</div>
+        ) : (
+          <div className="project-card-grid">
+            {projects.map((project) => (
               <button
+                key={project.id}
                 type="button"
-                className="secondary-button compact-button"
-                onClick={() => setShowGitHubRepositoryModal(true)}
-                disabled={!canManageGitHubIntegrations || !currentUser.organization_id}
+                className={`project-card${selectedProject?.id === project.id ? " selected" : ""}`}
+                onClick={() => void onOpenProjectPage(project)}
               >
-                Add
-              </button>
-            </div>
-          </div>
-          <div className="github-integration-list">
-            {githubIntegrations.length === 0 ? (
-              <div className="plain-list-item">
-                <strong>No repositories connected</strong>
-                <span>Add a repository connection to make it available for collaboration workflows.</span>
-              </div>
-            ) : (
-              githubIntegrations.map((integration) => (
-                <div key={integration.id} className="github-integration-item">
-                  <div>
-                    <strong>
-                      {integration.repo_owner}/{integration.repo_name}
-                    </strong>
-                    <span>{integration.repository_url ?? "No repository URL"}</span>
-                    <span>Branch: {integration.default_branch ?? "main"}</span>
-                    {integration.webhook_url && <span>Webhook: {integration.webhook_url}</span>}
-                    {integration.notes && <p>{integration.notes}</p>}
-                  </div>
-                  <span className={`note-status-badge status-${integration.status}`}>
-                    {integration.status}
-                  </span>
-                  <div className="github-integration-actions">
-                    <button
-                      type="button"
-                      className="secondary-button compact-button"
-                      onClick={() => void onRotateGitHubWebhookSecret(integration.id)}
-                      disabled={!canManageGitHubIntegrations}
-                    >
-                      Secret
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary-button compact-button"
-                      onClick={() => void onToggleGitHubIntegrationStatus(integration)}
-                      disabled={!canManageGitHubIntegrations}
-                    >
-                      {integration.status === "active" ? "Pause" : "Activate"}
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary-button compact-button"
-                      onClick={() => void onDeleteGitHubIntegration(integration.id)}
-                      disabled={!canManageGitHubIntegrations}
-                    >
-                      Delete
-                    </button>
-                  </div>
+                <div className="project-card-main">
+                  <strong>{project.name}</strong>
+                  <span className="project-card-desc">{project.description?.trim() || "설명 없음"}</span>
                 </div>
-              ))
-            )}
-          </div>
-          {githubWebhookSecretNotice && <p className="profile-notice">{githubWebhookSecretNotice}</p>}
-        </article>
-
-        <article className="card">
-          <div className="section-head">
-            <h3>Active Mappings</h3>
-            <div className="table-actions">
-              <span className="section-count">{githubProjectMappings.length} mappings</span>
-              <button
-                type="button"
-                className="secondary-button compact-button"
-                onClick={() => setShowGitHubMappingModal(true)}
-                disabled={!canManageGitHubIntegrations || githubIntegrations.length === 0 || projects.length === 0}
-              >
-                Add
+                <dl className="project-meta">
+                  <dt>책임자</dt>
+                  <dd>{getCompanyMemberName(project.owner_member_id) || "-"}</dd>
+                  <dt>과제번호</dt>
+                  <dd>{project.code}</dd>
+                  <dt>연구 기간</dt>
+                  <dd>{formatProjectPeriod(project.start_date, project.end_date)}</dd>
+                </dl>
+                <div className="project-card-footer">
+                  <span className={`project-status-pill status-${project.status}`}>{projectStatusLabel(project.status)}</span>
+                  <span className="project-card-chevron" aria-hidden="true">
+                    ›
+                  </span>
+                </div>
               </button>
-            </div>
+            ))}
           </div>
-          <div className="github-integration-list">
-            {githubProjectMappings.length === 0 ? (
-              <div className="plain-list-item">
-                <strong>No project mappings</strong>
-                <span>Map a repository to a project before webhook events can create research notes.</span>
-              </div>
-            ) : (
-              githubProjectMappings.map((mapping) => {
-                const integration = githubIntegrations.find((item) => item.id === mapping.integration_id);
-                const project = projects.find((item) => item.id === mapping.project_id);
-                return (
-                  <div key={mapping.id} className="github-integration-item">
-                    <div>
-                      <strong>
-                        {integration ? `${integration.repo_owner}/${integration.repo_name}` : `Repository #${mapping.integration_id}`}
-                      </strong>
-                      <span>Project: {project?.name ?? mapping.project_id}</span>
-                      <span>Branch: {mapping.branch_pattern ?? "*"}</span>
-                      <span>Mode: {mapping.note_creation_mode}</span>
-                    </div>
-                    <span className={`note-status-badge status-${mapping.is_active ? "approved" : "paused"}`}>
-                      {mapping.is_active ? "active" : "paused"}
-                    </span>
-                    <div className="github-integration-actions">
-                      <button
-                        type="button"
-                        className="secondary-button compact-button"
-                        onClick={() => void onToggleGitHubProjectMapping(mapping)}
-                        disabled={!canManageGitHubIntegrations}
-                      >
-                        {mapping.is_active ? "Pause" : "Activate"}
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary-button compact-button"
-                        onClick={() => void onDeleteGitHubProjectMapping(mapping.id)}
-                        disabled={!canManageGitHubIntegrations}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </article>
+        )}
       </section>
-
-      <section className="card github-events-card">
-        <div className="section-head">
-          <h3>GitHub Events</h3>
-          <div className="table-actions">
-            <span className="section-count">{githubEvents.length} events</span>
-            <button type="button" className="secondary-button compact-button" onClick={() => void refreshGitHubIntegrations()}>
-              Refresh
-            </button>
-          </div>
-        </div>
-        <div className="table-shell">
-          <table className="admin-table note-file-table">
-            <thead>
-              <tr>
-                <th>Event</th>
-                <th>Status</th>
-                <th>Project</th>
-                <th>Source</th>
-                <th>Generated Note</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {githubEvents.length === 0 && (
-                <tr>
-                  <td colSpan={6}>No GitHub events yet.</td>
-                </tr>
-              )}
-              {githubEvents.map((event) => {
-                const project = projects.find((item) => item.id === event.project_id);
-                return (
-                  <tr key={event.id}>
-                    <td>
-                      {event.event_type}
-                      {event.action ? ` / ${event.action}` : ""}
-                    </td>
-                    <td>
-                      <span className={`note-status-badge status-${event.status}`}>
-                        {event.status}
-                      </span>
-                    </td>
-                    <td>{project?.name ?? event.project_id ?? "-"}</td>
-                    <td>{event.source_url ? <a href={event.source_url} target="_blank" rel="noreferrer">Open</a> : "-"}</td>
-                    <td>{event.generated_note_id ?? "-"}</td>
-                    <td>
-                      <button
-                        type="button"
-                        className="secondary-button compact-button"
-                        onClick={() => void onGenerateNoteFromGitHubEvent(event.id)}
-                        disabled={Boolean(event.generated_note_id) || !event.project_mapping_id}
-                      >
-                        Generate Note
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      {showGitHubRepositoryModal && (
-        <div className="modal-backdrop" onClick={() => setShowGitHubRepositoryModal(false)}>
-          <section className="card note-modal github-config-modal" onClick={(event) => event.stopPropagation()}>
-            <div className="section-head">
-              <div>
-                <h3>Add Repository</h3>
-                <span>{canManageGitHubIntegrations ? "Owner access" : "Read only"}</span>
-              </div>
-              <button type="button" className="secondary-button compact-button" onClick={() => setShowGitHubRepositoryModal(false)}>
-                Close
-              </button>
-            </div>
-            <form onSubmit={onCreateGitHubIntegration} className="form-stack github-modal-form">
-              <label>
-                Owner
-                <input
-                  value={githubRepoOwner}
-                  onChange={(event) => setGithubRepoOwner(event.target.value)}
-                  placeholder="openai"
-                  required
-                  disabled={!canManageGitHubIntegrations}
-                />
-              </label>
-              <label>
-                Repository
-                <input
-                  value={githubRepoName}
-                  onChange={(event) => setGithubRepoName(event.target.value)}
-                  placeholder="labnote"
-                  required
-                  disabled={!canManageGitHubIntegrations}
-                />
-              </label>
-              <label>
-                Repository URL
-                <input
-                  value={githubRepoUrl}
-                  onChange={(event) => setGithubRepoUrl(event.target.value)}
-                  placeholder="https://github.com/openai/labnote"
-                  disabled={!canManageGitHubIntegrations}
-                />
-              </label>
-              <label>
-                Default Branch
-                <input
-                  value={githubDefaultBranch}
-                  onChange={(event) => setGithubDefaultBranch(event.target.value)}
-                  disabled={!canManageGitHubIntegrations}
-                />
-              </label>
-              <label className="github-modal-wide">
-                Notes
-                <textarea
-                  value={githubNotes}
-                  onChange={(event) => setGithubNotes(event.target.value)}
-                  rows={4}
-                  disabled={!canManageGitHubIntegrations}
-                />
-              </label>
-              <div className="github-modal-actions">
-                <button type="submit" className="compact-button" disabled={!canManageGitHubIntegrations || !currentUser.organization_id}>
-                  Connect Repository
-                </button>
-              </div>
-            </form>
-          </section>
-        </div>
-      )}
-
-      {showGitHubMappingModal && (
-        <div className="modal-backdrop" onClick={() => setShowGitHubMappingModal(false)}>
-          <section className="card note-modal github-config-modal" onClick={(event) => event.stopPropagation()}>
-            <div className="section-head">
-              <div>
-                <h3>Project Mapping</h3>
-                <span>Repository event to project workflow</span>
-              </div>
-              <button type="button" className="secondary-button compact-button" onClick={() => setShowGitHubMappingModal(false)}>
-                Close
-              </button>
-            </div>
-            <form onSubmit={onCreateGitHubProjectMapping} className="form-stack github-modal-form">
-              <label>
-                Repository
-                <select
-                  value={githubMappingIntegrationId}
-                  onChange={(event) => setGithubMappingIntegrationId(event.target.value ? Number(event.target.value) : "")}
-                  disabled={!canManageGitHubIntegrations}
-                >
-                  <option value="">Select a repository</option>
-                  {githubIntegrations.map((integration) => (
-                    <option key={integration.id} value={integration.id}>
-                      {integration.repo_owner}/{integration.repo_name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Project
-                <select
-                  value={githubMappingProjectId}
-                  onChange={(event) => setGithubMappingProjectId(event.target.value)}
-                  disabled={!canManageGitHubIntegrations}
-                >
-                  <option value="">Select a project</option>
-                  {projects.map((project) => (
-                    <option key={project.id} value={project.id}>
-                      {project.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Branch Pattern
-                <input
-                  value={githubMappingBranchPattern}
-                  onChange={(event) => setGithubMappingBranchPattern(event.target.value)}
-                  placeholder="main or release/*"
-                  disabled={!canManageGitHubIntegrations}
-                />
-              </label>
-              <label>
-                Note Creation Mode
-                <select
-                  value={githubMappingMode}
-                  onChange={(event) => setGithubMappingMode(event.target.value)}
-                  disabled={!canManageGitHubIntegrations}
-                >
-                  <option value="pr_merge">PR merge only</option>
-                  <option value="manual">Manual from event</option>
-                  <option value="every_push">Every push</option>
-                </select>
-              </label>
-              <label>
-                Default Author
-                <select
-                  value={githubMappingAuthorMemberId}
-                  onChange={(event) => setGithubMappingAuthorMemberId(event.target.value ? Number(event.target.value) : "")}
-                  disabled={!canManageGitHubIntegrations}
-                >
-                  <option value="">Project lead</option>
-                  {companyMembers.map((member) => (
-                    <option key={member.company_member_id} value={member.company_member_id}>
-                      {member.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Default Reviewer
-                <select
-                  value={githubMappingReviewerMemberId}
-                  onChange={(event) => setGithubMappingReviewerMemberId(event.target.value ? Number(event.target.value) : "")}
-                  disabled={!canManageGitHubIntegrations}
-                >
-                  <option value="">Project lead</option>
-                  {companyMembers.map((member) => (
-                    <option key={member.company_member_id} value={member.company_member_id}>
-                      {member.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="github-modal-actions">
-                <button type="submit" className="compact-button" disabled={!canManageGitHubIntegrations || !githubMappingIntegrationId || !githubMappingProjectId}>
-                  Save Mapping
-                </button>
-              </div>
-            </form>
-          </section>
-        </div>
-      )}
     </div>
   );
 
   const renderProfile = () => (
     <div className="user-stack">
       <section className="card feature-card">
-        <p className="eyebrow">Profile</p>
-        <h2>Personal Information</h2>
-        <p className="context-copy">Manage your account details and keep your signature ready for note workflows.</p>
+        <p className="eyebrow">프로필</p>
+        <h2>개인 정보</h2>
+        <p className="context-copy">계정 정보를 관리하고 결재에 쓸 서명을 등록하세요.</p>
       </section>
 
       <section className="profile-grid">
         <article className="card">
           <div className="section-head">
-            <h3>Account</h3>
+            <h3>계정</h3>
           </div>
           <div className="feature-list profile-summary">
             <div>
-              <strong>Name</strong>
+              <strong>이름</strong>
               <span>{currentUser.name}</span>
             </div>
             <div>
-              <strong>Username</strong>
+              <strong>아이디</strong>
               <span>{currentUser.username}</span>
             </div>
             <div>
-              <strong>Email</strong>
+              <strong>이메일</strong>
               <span>{currentUser.email}</span>
             </div>
             <div>
-              <strong>Status</strong>
+              <strong>상태</strong>
               <span>{currentUser.approval_status}</span>
             </div>
           </div>
@@ -3624,14 +3513,14 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
 
         <article className="card">
           <div className="section-head">
-            <h3>Signature</h3>
+            <h3>서명</h3>
             <button
               type="button"
               className="secondary-button compact-button"
               onClick={() => signatureInputRef.current?.click()}
               disabled={isSavingSignature}
             >
-              Choose Image
+              이미지 선택
             </button>
           </div>
 
@@ -3655,11 +3544,11 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
             onClick={() => signatureInputRef.current?.click()}
           >
             {signaturePreview ? (
-              <img src={signaturePreview} alt="Signature preview" className="signature-preview-image" />
+              <img src={signaturePreview} alt="서명 미리보기" className="signature-preview-image" />
             ) : (
               <div className="signature-dropzone-copy">
-                <strong>Drop signature image here</strong>
-                <span>Drag and drop or click to upload your signature image.</span>
+                <strong>서명 이미지를 여기에 놓으세요</strong>
+                <span>서명 이미지를 끌어다 놓거나 클릭해서 업로드하세요.</span>
               </div>
             )}
           </button>
@@ -3671,31 +3560,31 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
               onClick={() => void persistSignature(null)}
               disabled={!signaturePreview || isSavingSignature}
             >
-              Remove Signature
+              서명 삭제
             </button>
           </div>
 
           <div className="signature-version-list">
             {signatureVersions.length === 0 ? (
               <div className="plain-list-item">
-                <strong>No saved signatures</strong>
-                <span>Upload a signature image to make it available for approval snapshots.</span>
+                <strong>저장된 서명 없음</strong>
+                <span>서명 이미지를 올리면 결재에 사용할 수 있습니다.</span>
               </div>
             ) : (
               signatureVersions.map((signature) => (
                 <div key={signature.id} className="signature-version-item">
                   <img
                     src={getBackendAssetUrl(`/storage/${signature.image_storage_key}`)}
-                    alt={`Signature ${signature.id}`}
+                    alt={`서명 ${signature.id}`}
                   />
                   <div>
                     <strong>
                       Signature #{signature.id}
-                      {signature.status === "active" && <span className="signature-active-badge">Active</span>}
+                      {signature.status === "active" && <span className="signature-active-badge">활성</span>}
                     </strong>
                     <span>
                       {new Date(signature.created_at).toLocaleString()}
-                      {signature.revoked_at ? ` / revoked ${new Date(signature.revoked_at).toLocaleString()}` : ""}
+                      {signature.revoked_at ? ` / 폐기 ${new Date(signature.revoked_at).toLocaleString()}` : ""}
                     </span>
                   </div>
                   <button
@@ -3704,7 +3593,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
                     onClick={() => void onRevokeSignature(signature.id)}
                     disabled={signature.status === "revoked"}
                   >
-                    Revoke
+                    폐기
                   </button>
                 </div>
               ))
@@ -3713,6 +3602,8 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
 
           {profileNotice && <p className="profile-notice">{profileNotice}</p>}
         </article>
+
+        <PasswordChangeCard />
       </section>
     </div>
   );
@@ -3720,8 +3611,8 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
   const renderResearcherManagement = () => {
     if (!currentUser.is_org_owner) {
       return renderPlaceholder(
-        "Researcher Management",
-        "Only organization owners can invite company researchers."
+        "연구원 관리",
+        "기관 관리자만 연구원을 초대할 수 있습니다."
       );
     }
     const hasResearcherCompany = Boolean(currentUser.organization_id && researcherManagement);
@@ -3730,36 +3621,26 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
       <div className="user-stack">
         {!hasResearcherCompany && (
           <section className="card page-intro">
-            <p className="eyebrow">Notice</p>
+            <p className="eyebrow">알림</p>
             <p className="error">
-              This owner account is not connected to an active company yet. Finish owner signup approval or sign in with the approved company owner account first.
+              이 관리자 계정은 아직 활성 기관에 연결되지 않았습니다. 관리자 가입 승인을 마치거나 승인된 기관 관리자 계정으로 로그인하세요.
             </p>
           </section>
         )}
 
-        <section className="card">
-          <div className="section-head">
-            <h3>Invite by Email</h3>
-            <span>
-              Company: {researcherManagement?.company.name ?? "-"} / Code: {researcherManagement?.company.code ?? "-"}
-            </span>
-          </div>
-          <form onSubmit={onInviteResearcher} className="form-inline">
-            <input
-              type="email"
-              value={inviteEmail}
-              onChange={(e) => setInviteEmail(e.target.value)}
-              placeholder="researcher@example.com"
-              required
-              disabled={!hasResearcherCompany}
-            />
-            <button type="submit" className="compact-button" disabled={!hasResearcherCompany}>Invite</button>
-          </form>
-        </section>
+        <ResearcherRegistration
+          companyName={researcherManagement?.company.name ?? ""}
+          companyCode={researcherManagement?.company.code ?? ""}
+          pendingRequests={researcherManagement?.pending_requests ?? []}
+          disabled={!hasResearcherCompany}
+          onChanged={async () => {
+            await Promise.all([refreshResearcherManagement(), refreshCompanyMembers()]);
+          }}
+        />
 
         <section className="card">
           <div className="section-head">
-            <h3>Current Researchers</h3>
+            <h3>현재 연구원</h3>
             <span>{organizationResearchers.length}</span>
           </div>
           <ul className="list">
@@ -3768,18 +3649,18 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
                 <div>
                   <strong>{member.name}</strong>
                   <span>
-                    {member.email} / {member.role} / {member.is_active ? "active" : "inactive"}
+                    {member.email} / {roleLabel(member.role)} / {member.is_active ? "활성" : "비활성"}
                   </span>
                 </div>
                 {member.role === "owner" ? (
-                  <span className="project-pill">Owner</span>
+                  <span className="project-pill">관리자</span>
                 ) : (
                   <button
                     type="button"
                     className="secondary-button compact-button"
                     onClick={() => void onRemoveCompanyResearcher(member.company_member_id)}
                   >
-                    Remove
+                    제외
                   </button>
                 )}
               </li>
@@ -3790,67 +3671,140 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
     );
   };
 
-  const renderProjectDetailPage = () => (
-    <div className="portal-app">
-        <aside className="portal-sidebar">
-          <div className="project-context-card">
-            <span className="project-context-label">Project Space</span>
-            <strong>{selectedProject?.name}</strong>
-            <p>{selectedProject?.code || "No project code"}</p>
-            <button type="button" className="sidebar-back-button" onClick={onBackToProjects}>
-              ← Back to Projects
+  const renderSignatureAlerts = () => (
+    <>
+      {needsOwnSignature && !signatureReminderHidden && activeSection !== "profile" && (
+        <section className="signature-alert" role="alert">
+          <div>
+            <strong>서명이 등록되지 않았습니다</strong>
+            <p>
+              {myLedProjects.length > 0
+                ? `${myLedProjects[0].name}${myLedProjects.length > 1 ? ` 외 ${myLedProjects.length - 1}개` : ""} 프로젝트의 책임자로 지정되어 있습니다. `
+                : ""}
+              {myReviewWaiting.length > 0 ? `내 결재를 기다리는 노트가 ${myReviewWaiting.length}건 있습니다. ` : ""}
+              연구노트를 승인하면 서명이 들어가니 먼저 서명을 등록하세요.
+            </p>
+          </div>
+          <div className="signature-alert-actions">
+            <button
+              type="button"
+              className="compact-button"
+              onClick={() => {
+                setOpenedProjectId(null);
+                setActiveSection("profile");
+              }}
+            >
+              서명 등록하러 가기
+            </button>
+            <button
+              type="button"
+              className="secondary-button compact-button"
+              onClick={() => {
+                setSignatureReminderHidden(true);
+                try {
+                  window.sessionStorage.setItem("labnote.signatureReminderHidden", "1");
+                } catch {
+                  // Without storage the reminder simply comes back on the next load.
+                }
+              }}
+            >
+              나중에
             </button>
           </div>
+        </section>
+      )}
+      {leadSignatureNotice && (
+        <section className="signature-alert info" role="status">
+          <div>
+            <strong>책임자 서명 확인 필요</strong>
+            <p>{leadSignatureNotice}</p>
+          </div>
+          <div className="signature-alert-actions">
+            <button type="button" className="secondary-button compact-button" onClick={() => setLeadSignatureNotice(null)}>
+              확인
+            </button>
+          </div>
+        </section>
+      )}
+    </>
+  );
+
+  const renderProjectDetailPage = () => (
+    <div className={`portal-app${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+        <aside className="portal-sidebar">
+          <div className="sidebar-toggle-row">
+            <SidebarToggle collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
+          </div>
+          <div className="project-context-card">
+            <span className="project-context-label">프로젝트</span>
+            <strong>{selectedProject?.name}</strong>
+            <p>{selectedProject?.code || "프로젝트 코드 없음"}</p>
+            <button type="button" className="sidebar-back-button" onClick={onBackToProjects}>
+              ← 프로젝트 목록
+            </button>
+          </div>
+          <SidebarUploadButton
+            collapsed={sidebarCollapsed}
+            onItems={(items) => {
+              if (items.length === 0) return;
+              setProjectView("notes");
+              queueResearchFilesForNewNote(items);
+            }}
+          />
           <nav className="user-nav project-nav">
           <button
             type="button"
-            className={`user-nav-item${projectView === "dashboard" ? " active" : ""}`}
-            onClick={() => setProjectView("dashboard")}
+            className="user-nav-item sidebar-back-icon"
+            onClick={onBackToProjects}
+            title="프로젝트 목록으로"
           >
-            <SidebarIcon name="dashboard" />
-            <strong>Project Dashboard</strong>
+            <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M19 12H5" />
+              <path d="m12 19-7-7 7-7" />
+            </svg>
+            <strong>프로젝트 목록</strong>
           </button>
-          <button
-            type="button"
-            className={`user-nav-item${projectView === "members" ? " active" : ""}`}
-            onClick={() => setProjectView("members")}
-          >
-            <SidebarIcon name="members" />
-            <strong>Researcher Management</strong>
-          </button>
-          <button
-            type="button"
-            className={`user-nav-item${projectView === "notes" ? " active" : ""}`}
-            onClick={() => setProjectView("notes")}
-          >
-            <SidebarIcon name="notes" />
-            <strong>Research Note</strong>
-          </button>
-          <button
-            type="button"
-            className={`user-nav-item${projectView === "cover" ? " active" : ""}`}
-            onClick={() => setProjectView("cover")}
-          >
-            <SidebarIcon name="cover" />
-            <strong>Cover Template</strong>
-          </button>
+          {(
+            [
+              ["dashboard", "프로젝트 대시보드"],
+              ["members", "연구원 관리"],
+              ["notes", "연구노트"],
+              ["data", "데이터 보관함"],
+              ["imaging", "이미지 처리"],
+              ["ai", "AI 생성"],
+              ["github", "GitHub"],
+              ["cover", "표지 템플릿"],
+            ] as const
+          ).map(([view, label]) => (
+            <button
+              key={view}
+              type="button"
+              className={`user-nav-item${projectView === view ? " active" : ""}`}
+              onClick={() => setProjectView(view)}
+              title={sidebarCollapsed ? label : undefined}
+            >
+              <SidebarIcon name={view} />
+              <strong>{label}</strong>
+            </button>
+          ))}
         </nav>
       </aside>
 
         <main className="portal-main">
           <div className="user-content user-content-full">
+            {renderSignatureAlerts()}
             <section className="card project-workspace-content project-workspace-content-standalone">
               {projectView !== "dashboard" && (
                 <div className="section-head project-section-head">
                   <div>
-                    <p className="eyebrow">Project Workspace</p>
+                    <p className="eyebrow">프로젝트 작업 공간</p>
                     <h3>{projectViewMeta[projectView].title}</h3>
                     <p className="context-copy">{projectViewMeta[projectView].description}</p>
                   </div>
-                  {projectView === "notes" && (
+                  {projectView === "notes" && !bulkUploadFiles && !noteCreateFiles && (
                     <div className="note-file-actions">
                       <button type="button" className="compact-button" onClick={() => openCreateNoteModal()}>
-                        Add Note
+                        노트 추가
                       </button>
                       <button
                         type="button"
@@ -3859,10 +3813,10 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
                         disabled={isBatchDownloading || notes.length === 0}
                       >
                         {isBatchDownloading
-                          ? "Downloading..."
+                          ? "다운로드 중..."
                           : isNoteSelectionMode
-                            ? `Download Selected${selectedNoteIds.length > 0 ? ` (${selectedNoteIds.length})` : ""}`
-                            : "Select Notes to Download"}
+                            ? `선택 다운로드${selectedNoteIds.length > 0 ? ` (${selectedNoteIds.length})` : ""}`
+                            : "다운로드할 노트 선택"}
                       </button>
                       {isNoteSelectionMode && (
                         <button
@@ -3874,7 +3828,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
                           }}
                           disabled={isBatchDownloading}
                         >
-                          Cancel Selection
+                          선택 취소
                         </button>
                       )}
                     </div>
@@ -3884,6 +3838,58 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
               {projectView === "dashboard" && renderProjectDashboard()}
               {projectView === "members" && renderProjectMembers()}
               {projectView === "notes" && renderProjectNotes()}
+              {projectView === "data" && selectedProject && (
+                <DataStorage
+                  key={selectedProject.id}
+                  projectId={selectedProject.id}
+                  onMakeNotes={(items) => {
+                    setBulkUploadFiles(items);
+                    setProjectView("notes");
+                  }}
+                  onSendToAi={(files) => {
+                    setAiSeedDocuments({ files, token: Date.now() });
+                    setProjectView("ai");
+                  }}
+                />
+              )}
+              {projectView === "imaging" && <ImageLab />}
+              {projectView === "ai" && selectedProject && (
+                <ProjectAiGenerator
+                  initialDocuments={aiSeedDocuments}
+                  key={selectedProject.id}
+                  projectId={selectedProject.id}
+                  companyId={selectedProject.company_id}
+                  notes={notes}
+                  onOpenNote={(noteId) => {
+                    setProjectView("notes");
+                    pendingSearchNoteId.current = noteId;
+                    void refreshNotes(selectedProject.id);
+                  }}
+                  onNotesChanged={() => void refreshNotes(selectedProject.id)}
+                  onOpenManualBulk={() => {
+                    setProjectView("notes");
+                    setShowBatchGenerator(true);
+                  }}
+                />
+              )}
+              {projectView === "github" && selectedProject && (
+                <ProjectGitHubPanel
+                  projectId={selectedProject.id}
+                  members={(members.length > 0 ? members : []).map((member) => ({ id: member.company_member_id, name: member.name }))}
+                  defaultAuthorId={typeof defaultNoteAuthorMemberId === "number" ? defaultNoteAuthorMemberId : null}
+                  defaultReviewerId={selectedProject.owner_member_id ?? null}
+                  onOpenAccountSettings={() => {
+                    setOpenedProjectId(null);
+                    setActiveSection("github");
+                  }}
+                  onOpenNote={(noteId) => {
+                    setProjectView("notes");
+                    pendingSearchNoteId.current = noteId;
+                    void refreshNotes(selectedProject.id);
+                  }}
+                  onNotesChanged={() => void refreshNotes(selectedProject.id)}
+                />
+              )}
               {projectView === "cover" && renderProjectCover()}
             </section>
           </div>
@@ -3893,8 +3899,8 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
 
   const renderPlaceholder = (title: string, copy: string) => (
     <section className="card feature-card">
-      <p className="eyebrow">Workspace Module</p>
-      <h2>Coming Soon</h2>
+      <p className="eyebrow">작업 공간 기능</p>
+      <h2>준비 중</h2>
       <p>{copy}</p>
     </section>
   );
@@ -3902,15 +3908,15 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
   const renderCompanyAccessGate = () => (
     <section className="auth-shell">
       <div className="auth-card">
-        <p className="eyebrow">Company Access</p>
-        <h2>Request company access</h2>
+        <p className="eyebrow">기관 가입</p>
+        <h2>기관 가입 요청</h2>
         <p className="auth-copy">
-          This account is not connected to a company yet. Until you are invited or approved, only this request screen is available.
+          이 계정은 아직 기관에 연결되지 않았습니다. 초대나 승인을 받기 전까지는 가입 요청 화면만 쓸 수 있습니다.
         </p>
 
         <form onSubmit={onRequestCompanyAccess} className="form-stack">
           <label>
-            Company name
+            기관명
             <input
               value={companyAccessName}
               onChange={(e) => setCompanyAccessName(e.target.value)}
@@ -3919,7 +3925,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
             />
           </label>
           <label>
-            Company code
+            기관 코드
             <input
               value={companyAccessCode}
               onChange={(e) => setCompanyAccessCode(e.target.value.toUpperCase())}
@@ -3927,21 +3933,21 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
               disabled={companyAccessRequest !== null}
             />
           </label>
-          <button type="submit" disabled={companyAccessRequest !== null}>Request Access</button>
+          <button type="submit" disabled={companyAccessRequest !== null}>가입 요청</button>
         </form>
 
         {companyAccessRequest && (
           <section className="card inset-card">
-            <p className="eyebrow">Pending Request</p>
+            <p className="eyebrow">대기 중인 요청</p>
             <h3>{companyAccessRequest.company_name}</h3>
             <p className="context-copy">
-              Code: {companyAccessRequest.company_code} / Status: {companyAccessRequest.status}
+              기관 코드: {companyAccessRequest.company_code} / 상태: {({ pending: "대기", approved: "승인됨", rejected: "반려됨" } as Record<string, string>)[companyAccessRequest.status] ?? companyAccessRequest.status}
             </p>
           </section>
         )}
 
         {companyAccessNotice && <p>{companyAccessNotice}</p>}
-        {error && <p className="error">Error: {error}</p>}
+        {error && <p className="error">오류: {error}</p>}
       </div>
     </section>
   );
@@ -3958,8 +3964,11 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
   }
 
   return (
-    <div className="portal-app">
+    <div className={`portal-app${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
       <aside className="portal-sidebar">
+        <div className="sidebar-toggle-row">
+          <SidebarToggle collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
+        </div>
         <nav className="user-nav">
           {sectionMeta.map((section) => {
             if (section.id === "projects") {
@@ -3969,6 +3978,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
                   className={`user-nav-item${activeSection === section.id ? " active" : ""}`}
                   onClick={() => setActiveSection("projects")}
                   type="button"
+                  title={sidebarCollapsed ? section.title : undefined}
                 >
                   <SidebarIcon name={section.id} />
                   <strong>{section.title}</strong>
@@ -3982,6 +3992,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
                 className={`user-nav-item${activeSection === section.id ? " active" : ""}`}
                 onClick={() => setActiveSection(section.id)}
                 type="button"
+                title={sidebarCollapsed ? section.title : undefined}
               >
                 <SidebarIcon name={section.id} />
                 <strong>{section.title}</strong>
@@ -3993,26 +4004,43 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken }:
 
       <main className="portal-main">
         <div className="user-content">
+        {renderSignatureAlerts()}
         {showPageIntro && (
           <section className="card page-intro">
             <p className="eyebrow">{activeMeta.title}</p>
             <p>{activeMeta.description}</p>
-            {error && <p className="error">Error: {error}</p>}
+            {error && <p className="error">오류: {error}</p>}
           </section>
         )}
         {!showPageIntro && error && (
           <section className="card page-intro">
-            <p className="eyebrow">Notice</p>
-            <p className="error">Error: {error}</p>
+            <p className="eyebrow">알림</p>
+            <p className="error">오류: {error}</p>
           </section>
         )}
 
         {activeSection === "home" && renderHome()}
         {activeSection === "projects" && renderProjects()}
         {activeSection === "researchers" && renderResearcherManagement()}
-        {activeSection === "github" && renderGitHubIntegration()}
-        {activeSection === "platforms" &&
-          renderPlaceholder("Platform Integration", "Manage company-level storage, service, and platform connections here.")}
+        {activeSection === "format" && (
+          <NoteFormatSettings info={noteFormatInfo} loadError={noteFormatError} onSave={onSaveNoteFormat} onDelete={onDeleteNoteFormat} />
+        )}
+        {activeSection === "github" && (
+          <GitHubAccountSettings
+            onOpenProjectGitHub={(projectId) => {
+              const project = projects.find((item) => item.id === projectId);
+              if (!project) return;
+              void (async () => {
+                await onOpenProjectPage(project);
+                setProjectView("github");
+              })();
+            }}
+          />
+        )}
+        {activeSection === "platforms" && <LlmConnectionSettings
+          companyId={currentUser.organization_id ?? undefined}
+          onSaved={() => { void getNoteGenerationStatus().then(setLlmStatus).catch(() => setLlmStatus(null)); }}
+        />}
         {activeSection === "profile" && renderProfile()}
         </div>
       </main>

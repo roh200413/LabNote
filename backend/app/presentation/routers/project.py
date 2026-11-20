@@ -37,7 +37,7 @@ def create_project_endpoint(payload: ProjectCreateRequest, current_user=Depends(
     try:
         project = create_project(db, current_user, **payload.model_dump())
     except IntegrityError as exc:
-        raise HTTPException(status_code=409, detail="Project code already exists in company") from exc
+        raise HTTPException(status_code=409, detail="기관 안에 이미 있는 프로젝트 코드입니다") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ProjectAccessDeniedError as exc:
@@ -61,7 +61,7 @@ def get_project_endpoint(project_id: str, current_user=Depends(get_current_user)
     try:
         return get_project(db, project_id, current_user)
     except ProjectNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Project not found") from exc
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다") from exc
     except ProjectAccessDeniedError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -73,9 +73,9 @@ def update_project_endpoint(
     try:
         return update_project(db, project_id, current_user, **payload.model_dump(exclude_unset=True))
     except ProjectNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Project not found") from exc
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다") from exc
     except IntegrityError as exc:
-        raise HTTPException(status_code=409, detail="Project code already exists in company") from exc
+        raise HTTPException(status_code=409, detail="기관 안에 이미 있는 프로젝트 코드입니다") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except (ProjectAccessDeniedError, ProjectManageDeniedError) as exc:
@@ -91,7 +91,7 @@ def delete_project_endpoint(
     try:
         delete_project(db, project_id, current_user)
     except ProjectNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Project not found") from exc
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다") from exc
     except (ProjectAccessDeniedError, ProjectManageDeniedError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -105,9 +105,13 @@ def assign_project_member_endpoint(
     db: Session = Depends(get_db),
 ):
     try:
-        return assign_project_member(db, project_id, payload.company_member_id, payload.role, current_user)
+        assigned = assign_project_member(db, project_id, payload.company_member_id, payload.role, current_user)
+        # Return the same shape as the member list (name, email, company/user ids), not the bare ORM row.
+        return next(
+            item for item in list_project_members(db, project_id, current_user) if item["id"] == assigned.id
+        )
     except ProjectNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Project not found") from exc
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except (ProjectAccessDeniedError, ProjectManageDeniedError) as exc:
@@ -119,7 +123,7 @@ def list_project_members_endpoint(project_id: str, current_user=Depends(get_curr
     try:
         return list_project_members(db, project_id, current_user)
     except ProjectNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Project not found") from exc
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다") from exc
     except ProjectAccessDeniedError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -134,7 +138,7 @@ def remove_project_member_endpoint(
     try:
         get_project(db, project_id, current_user)
     except ProjectNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Project not found") from exc
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다") from exc
     except ProjectAccessDeniedError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -143,7 +147,7 @@ def remove_project_member_endpoint(
     except ProjectManageDeniedError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     if not removed:
-        raise HTTPException(status_code=404, detail="Project member not found")
+        raise HTTPException(status_code=404, detail="프로젝트 연구원을 찾을 수 없습니다")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -152,7 +156,7 @@ def get_project_cover_endpoint(project_id: str, current_user=Depends(get_current
     try:
         return get_project_cover(db, project_id, current_user)
     except ProjectNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Project not found") from exc
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다") from exc
     except ProjectAccessDeniedError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -167,6 +171,6 @@ def upsert_project_cover_endpoint(
     try:
         return upsert_project_cover(db, project_id, current_user, **payload.model_dump())
     except ProjectNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Project not found") from exc
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다") from exc
     except (ProjectAccessDeniedError, ProjectManageDeniedError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc

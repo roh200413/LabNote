@@ -14,6 +14,8 @@ def now_utc_iso() -> str:
 
 
 def get_admin_dashboard(db: Session) -> dict:
+    from app.domain.companies.use_cases import list_pending_organizations
+
     users = SqlAlchemyUserAccountRepository(db).list_all()
     companies = SqlAlchemyCompanyRepository(db).list_all()
     audits = SqlAlchemyAuditLogRepository(db)
@@ -38,7 +40,7 @@ def get_admin_dashboard(db: Session) -> dict:
         "total_users": len(users),
         "total_organizations": len(companies),
         "active_admins": sum(1 for user in users if user.global_role == "system_admin" and user.is_active),
-        "pending_organizations": sum(1 for company in companies if not company.is_active),
+        "pending_organizations": len(list_pending_organizations(db)),
         "logins_by_day": logins_by_day,
         "recent_logins": [
             {

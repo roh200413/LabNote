@@ -95,7 +95,7 @@ async function parseProjectError(response: Response, fallback: string): Promise<
 export async function listProjects(companyId?: number): Promise<Project[]> {
   const query = companyId ? `?company_id=${companyId}` : "";
   const response = await apiFetch(`/projects${query}`);
-  if (!response.ok) throw new Error(await parseProjectError(response, "Failed to fetch projects"));
+  if (!response.ok) throw new Error(await parseProjectError(response, "프로젝트를 불러오지 못했습니다"));
   return response.json();
 }
 
@@ -105,7 +105,7 @@ export async function createProject(payload: CreateProjectPayload): Promise<Proj
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error(await parseProjectError(response, "Failed to create project"));
+  if (!response.ok) throw new Error(await parseProjectError(response, "프로젝트 생성에 실패했습니다"));
   return response.json();
 }
 
@@ -115,13 +115,13 @@ export async function updateProject(projectId: string, payload: UpdateProjectPay
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error(await parseProjectError(response, "Failed to update project"));
+  if (!response.ok) throw new Error(await parseProjectError(response, "프로젝트 수정에 실패했습니다"));
   return response.json();
 }
 
 export async function getProjectMembers(projectId: string): Promise<ProjectMember[]> {
   const response = await apiFetch(`/projects/${projectId}/members`);
-  if (!response.ok) throw new Error(await parseProjectError(response, "Failed to fetch project members"));
+  if (!response.ok) throw new Error(await parseProjectError(response, "프로젝트 연구원을 불러오지 못했습니다"));
   return response.json();
 }
 
@@ -135,7 +135,7 @@ export async function assignProjectMember(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ company_member_id: companyMemberId, role }),
   });
-  if (!response.ok) throw new Error(await parseProjectError(response, "Failed to assign member"));
+  if (!response.ok) throw new Error(await parseProjectError(response, "연구원 배정에 실패했습니다"));
   return response.json();
 }
 
@@ -143,12 +143,12 @@ export async function removeProjectMember(projectId: string, companyMemberId: nu
   const response = await apiFetch(`/projects/${projectId}/members/${companyMemberId}`, {
     method: "DELETE",
   });
-  if (!response.ok) throw new Error(await parseProjectError(response, "Failed to remove member"));
+  if (!response.ok) throw new Error(await parseProjectError(response, "연구원 제외에 실패했습니다"));
 }
 
 export async function getProjectCover(projectId: string): Promise<ProjectNoteCover | null> {
   const response = await apiFetch(`/projects/${projectId}/cover`);
-  if (!response.ok) throw new Error(await parseProjectError(response, "Failed to fetch project cover"));
+  if (!response.ok) throw new Error(await parseProjectError(response, "프로젝트 표지를 불러오지 못했습니다"));
   return response.json();
 }
 
@@ -161,6 +161,6 @@ export async function upsertProjectCover(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error(await parseProjectError(response, "Failed to save project cover"));
+  if (!response.ok) throw new Error(await parseProjectError(response, "프로젝트 표지 저장에 실패했습니다"));
   return response.json();
 }

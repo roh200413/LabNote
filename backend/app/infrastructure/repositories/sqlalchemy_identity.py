@@ -101,7 +101,7 @@ class SqlAlchemyUserAccountRepository:
     def update(self, user: UserAccount) -> UserAccount:
         orm = self.db.get(UserAccountORM, user.id)
         if orm is None:
-            raise ValueError("User not found")
+            raise ValueError("사용자를 찾을 수 없습니다")
         orm.username = user.username
         orm.display_name = user.display_name
         orm.email = user.email
@@ -144,7 +144,7 @@ class SqlAlchemyCompanyRepository:
     def update(self, company: Company) -> Company:
         orm = self.db.get(CompanyORM, company.id)
         if orm is None:
-            raise ValueError("Company not found")
+            raise ValueError("기관을 찾을 수 없습니다")
         orm.name = company.name
         orm.join_code = company.join_code
         orm.is_active = company.is_active
@@ -185,7 +185,7 @@ class SqlAlchemyCompanyMemberRepository:
     def update(self, member: CompanyMember) -> CompanyMember:
         orm = self.db.get(CompanyMemberORM, member.id)
         if orm is None:
-            raise ValueError("Company member not found")
+            raise ValueError("기관 구성원을 찾을 수 없습니다")
         orm.company_id = member.company_id
         orm.user_id = member.user_id
         orm.role = member.role
@@ -233,7 +233,7 @@ class SqlAlchemyCompanyMembershipRequestRepository:
     def update(self, request: CompanyMembershipRequest) -> CompanyMembershipRequest:
         orm = self.db.get(CompanyMembershipRequestORM, request.id)
         if orm is None:
-            raise ValueError("Company membership request not found")
+            raise ValueError("기관 가입 요청을 찾을 수 없습니다")
         orm.status = request.status
         self.db.flush()
         self.db.refresh(orm)

@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 
+from app.infrastructure.github.client import GitHubClient, get_github_client
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -121,7 +122,7 @@ def create_github_integration_endpoint(
     except (GitHubIntegrationAccessDeniedError, GitHubIntegrationManageDeniedError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except IntegrityError as exc:
-        raise HTTPException(status_code=409, detail="Repository integration already exists") from exc
+        raise HTTPException(status_code=409, detail="이미 연동된 저장소입니다") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -148,7 +149,7 @@ def list_github_events_endpoint(
     except (GitHubIntegrationAccessDeniedError, GitHubIntegrationManageDeniedError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except GitHubIntegrationNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="GitHub integration not found") from exc
+        raise HTTPException(status_code=404, detail="GitHub 연동을 찾을 수 없습니다") from exc
 
 
 @router.post("/events/{event_id}/generate-note", response_model=GitHubEventResponse)
@@ -156,13 +157,14 @@ def generate_note_from_github_event_endpoint(
     event_id: int,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
+    client: GitHubClient = Depends(get_github_client),
 ) -> GitHubEventResponse:
     try:
-        generate_note_from_github_event(db, event_id, generation_type="manual", current_user=current_user)
+        generate_note_from_github_event(db, event_id, generation_type="manual", current_user=current_user, client=client)
         event = next(item for item in list_github_events(db, current_user) if item.id == event_id)
         return _to_event_response(db, event)
     except StopIteration as exc:
-        raise HTTPException(status_code=404, detail="GitHub event not found") from exc
+        raise HTTPException(status_code=404, detail="GitHub 이벤트를 찾을 수 없습니다") from exc
     except (GitHubIntegrationAccessDeniedError, GitHubIntegrationManageDeniedError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except (GitHubIntegrationNotFoundError, ValueError) as exc:
@@ -179,7 +181,7 @@ def get_github_integration_endpoint(
     try:
         return _to_integration_response(get_github_integration(db, integration_id, current_user), request)
     except GitHubIntegrationNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="GitHub integration not found") from exc
+        raise HTTPException(status_code=404, detail="GitHub 연동을 찾을 수 없습니다") from exc
     except GitHubIntegrationAccessDeniedError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -203,11 +205,11 @@ def update_github_integration_endpoint(
             request,
         )
     except GitHubIntegrationNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="GitHub integration not found") from exc
+        raise HTTPException(status_code=404, detail="GitHub 연동을 찾을 수 없습니다") from exc
     except (GitHubIntegrationAccessDeniedError, GitHubIntegrationManageDeniedError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except IntegrityError as exc:
-        raise HTTPException(status_code=409, detail="Repository integration already exists") from exc
+        raise HTTPException(status_code=409, detail="이미 연동된 저장소입니다") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -221,7 +223,7 @@ def delete_github_integration_endpoint(
     try:
         delete_github_integration(db, integration_id, current_user)
     except GitHubIntegrationNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="GitHub integration not found") from exc
+        raise HTTPException(status_code=404, detail="GitHub 연동을 찾을 수 없습니다") from exc
     except (GitHubIntegrationAccessDeniedError, GitHubIntegrationManageDeniedError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -242,7 +244,7 @@ def rotate_github_webhook_secret_endpoint(
             webhook_url=_webhook_url(request, integration.id),
         )
     except GitHubIntegrationNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="GitHub integration not found") from exc
+        raise HTTPException(status_code=404, detail="GitHub 연동을 찾을 수 없습니다") from exc
     except (GitHubIntegrationAccessDeniedError, GitHubIntegrationManageDeniedError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -256,7 +258,7 @@ def list_project_mappings_endpoint(
     try:
         return list_project_mappings(db, integration_id, current_user)
     except GitHubIntegrationNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="GitHub integration not found") from exc
+        raise HTTPException(status_code=404, detail="GitHub 연동을 찾을 수 없습니다") from exc
     except GitHubIntegrationAccessDeniedError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -271,7 +273,7 @@ def create_project_mapping_endpoint(
     try:
         return create_project_mapping(db, integration_id, current_user, **payload.model_dump())
     except GitHubIntegrationNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="GitHub integration not found") from exc
+        raise HTTPException(status_code=404, detail="GitHub 연동을 찾을 수 없습니다") from exc
     except (GitHubIntegrationAccessDeniedError, GitHubIntegrationManageDeniedError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
@@ -288,7 +290,7 @@ def update_project_mapping_endpoint(
     try:
         return update_project_mapping(db, mapping_id, current_user, **payload.model_dump(exclude_unset=True))
     except GitHubIntegrationNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="GitHub project mapping not found") from exc
+        raise HTTPException(status_code=404, detail="GitHub 프로젝트 매핑을 찾을 수 없습니다") from exc
     except (GitHubIntegrationAccessDeniedError, GitHubIntegrationManageDeniedError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
@@ -304,7 +306,7 @@ def delete_project_mapping_endpoint(
     try:
         delete_project_mapping(db, mapping_id, current_user)
     except GitHubIntegrationNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="GitHub project mapping not found") from exc
+        raise HTTPException(status_code=404, detail="GitHub 프로젝트 매핑을 찾을 수 없습니다") from exc
     except (GitHubIntegrationAccessDeniedError, GitHubIntegrationManageDeniedError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -318,10 +320,11 @@ async def github_webhook_endpoint(
     x_github_delivery: str = Header(..., alias="X-GitHub-Delivery"),
     x_hub_signature_256: str | None = Header(default=None, alias="X-Hub-Signature-256"),
     db: Session = Depends(get_db),
+    client: GitHubClient = Depends(get_github_client),
 ) -> GitHubWebhookResponse:
     integration = db.get(GitHubRepositoryIntegrationORM, integration_id)
     if integration is None:
-        raise HTTPException(status_code=404, detail="GitHub integration not found")
+        raise HTTPException(status_code=404, detail="GitHub 연동을 찾을 수 없습니다")
     body = await request.body()
     _verify_webhook_signature(integration.webhook_secret, body, x_hub_signature_256)
     try:
@@ -331,6 +334,7 @@ async def github_webhook_endpoint(
             delivery_id=x_github_delivery,
             event_type=x_github_event,
             payload=await request.json(),
+            client=client,
         )
         return GitHubWebhookResponse(
             event_id=event.id,
@@ -339,4 +343,4 @@ async def github_webhook_endpoint(
             message="GitHub event received",
         )
     except GitHubIntegrationNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="GitHub integration not found") from exc
+        raise HTTPException(status_code=404, detail="GitHub 연동을 찾을 수 없습니다") from exc

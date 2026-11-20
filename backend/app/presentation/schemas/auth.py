@@ -16,7 +16,7 @@ class SignUpRequest(BaseModel):
     def validate_email(cls, value: str) -> str:
         normalized = value.strip().lower()
         if "@" not in normalized or "." not in normalized.split("@")[-1]:
-            raise ValueError("Invalid email")
+            raise ValueError("올바른 이메일이 아닙니다")
         return normalized
 
     @field_validator("organization_name", "organization_code")
@@ -37,7 +37,7 @@ class LoginRequest(BaseModel):
     def validate_email(cls, value: str) -> str:
         normalized = value.strip().lower()
         if "@" not in normalized or "." not in normalized.split("@")[-1]:
-            raise ValueError("Invalid email")
+            raise ValueError("올바른 이메일이 아닙니다")
         return normalized
 
 
@@ -88,7 +88,7 @@ class CompanyAccessRequestPayload(BaseModel):
     def normalize_required_text(cls, value: str) -> str:
         normalized = value.strip()
         if not normalized:
-            raise ValueError("This field is required")
+            raise ValueError("필수 입력 항목입니다")
         return normalized
 
 
@@ -103,3 +103,8 @@ class CompanyAccessRequestResponse(BaseModel):
     user: UserResponse
     request: CompanyAccessRequestInfo | None = None
     message: str
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)

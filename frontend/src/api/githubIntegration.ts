@@ -86,7 +86,7 @@ async function parseGitHubError(response: Response, fallback: string): Promise<s
 export async function listGitHubIntegrations(companyId?: number | null): Promise<GitHubRepositoryIntegration[]> {
   const query = companyId ? `?company_id=${companyId}` : "";
   const response = await apiFetch(`/github-integrations${query}`);
-  if (!response.ok) throw new Error(await parseGitHubError(response, "Failed to load GitHub integrations"));
+  if (!response.ok) throw new Error(await parseGitHubError(response, "GitHub 연동 목록을 불러오지 못했습니다"));
   return response.json();
 }
 
@@ -98,7 +98,7 @@ export async function createGitHubIntegration(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error(await parseGitHubError(response, "Failed to create GitHub integration"));
+  if (!response.ok) throw new Error(await parseGitHubError(response, "GitHub 연동 생성에 실패했습니다"));
   return response.json();
 }
 
@@ -111,7 +111,7 @@ export async function updateGitHubIntegration(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error(await parseGitHubError(response, "Failed to update GitHub integration"));
+  if (!response.ok) throw new Error(await parseGitHubError(response, "GitHub 연동 수정에 실패했습니다"));
   return response.json();
 }
 
@@ -119,20 +119,20 @@ export async function deleteGitHubIntegration(integrationId: number): Promise<vo
   const response = await apiFetch(`/github-integrations/${integrationId}`, {
     method: "DELETE",
   });
-  if (!response.ok) throw new Error(await parseGitHubError(response, "Failed to delete GitHub integration"));
+  if (!response.ok) throw new Error(await parseGitHubError(response, "GitHub 연동 삭제에 실패했습니다"));
 }
 
 export async function rotateGitHubWebhookSecret(integrationId: number): Promise<GitHubWebhookSecret> {
   const response = await apiFetch(`/github-integrations/${integrationId}/webhook-secret`, {
     method: "POST",
   });
-  if (!response.ok) throw new Error(await parseGitHubError(response, "Failed to rotate webhook secret"));
+  if (!response.ok) throw new Error(await parseGitHubError(response, "웹훅 시크릿 재발급에 실패했습니다"));
   return response.json();
 }
 
 export async function listGitHubProjectMappings(integrationId: number): Promise<GitHubProjectMapping[]> {
   const response = await apiFetch(`/github-integrations/${integrationId}/mappings`);
-  if (!response.ok) throw new Error(await parseGitHubError(response, "Failed to load project mappings"));
+  if (!response.ok) throw new Error(await parseGitHubError(response, "프로젝트 매핑을 불러오지 못했습니다"));
   return response.json();
 }
 
@@ -145,7 +145,7 @@ export async function createGitHubProjectMapping(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error(await parseGitHubError(response, "Failed to create project mapping"));
+  if (!response.ok) throw new Error(await parseGitHubError(response, "프로젝트 매핑 생성에 실패했습니다"));
   return response.json();
 }
 
@@ -158,7 +158,7 @@ export async function updateGitHubProjectMapping(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error(await parseGitHubError(response, "Failed to update project mapping"));
+  if (!response.ok) throw new Error(await parseGitHubError(response, "프로젝트 매핑 수정에 실패했습니다"));
   return response.json();
 }
 
@@ -166,7 +166,7 @@ export async function deleteGitHubProjectMapping(mappingId: number): Promise<voi
   const response = await apiFetch(`/github-integrations/mappings/${mappingId}`, {
     method: "DELETE",
   });
-  if (!response.ok) throw new Error(await parseGitHubError(response, "Failed to delete project mapping"));
+  if (!response.ok) throw new Error(await parseGitHubError(response, "프로젝트 매핑 삭제에 실패했습니다"));
 }
 
 export async function listGitHubEvents(filters: {
@@ -180,14 +180,16 @@ export async function listGitHubEvents(filters: {
   if (filters.status) params.set("status", filters.status);
   const query = params.toString() ? `?${params.toString()}` : "";
   const response = await apiFetch(`/github-integrations/events${query}`);
-  if (!response.ok) throw new Error(await parseGitHubError(response, "Failed to load GitHub events"));
+  if (!response.ok) throw new Error(await parseGitHubError(response, "GitHub 이벤트를 불러오지 못했습니다"));
   return response.json();
 }
 
 export async function generateResearchNoteFromGitHubEvent(eventId: number): Promise<GitHubEvent> {
+  // The organization's LLM may take a while to explain a large diff.
   const response = await apiFetch(`/github-integrations/events/${eventId}/generate-note`, {
     method: "POST",
+    timeoutMs: 180000,
   });
-  if (!response.ok) throw new Error(await parseGitHubError(response, "Failed to generate research note"));
+  if (!response.ok) throw new Error(await parseGitHubError(response, "연구노트 생성에 실패했습니다"));
   return response.json();
 }

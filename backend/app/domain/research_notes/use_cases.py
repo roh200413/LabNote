@@ -143,17 +143,17 @@ def _require_project_access(
 
     company_member = _get_company_member(db, user_id=current_user.id or 0, company_id=project.company_id)
     if company_member is None:
-        raise ResearchNoteAccessDeniedError("You are not a member of this company")
+        raise ResearchNoteAccessDeniedError("이 기관의 구성원이 아닙니다")
 
     if current_user.is_company_owner:
         return company_member
 
     project_member = _get_project_member(db, project_id=project.id, company_member_id=company_member.id)
     if project_member is None:
-        raise ResearchNoteAccessDeniedError("Only project members can access this research note")
+        raise ResearchNoteAccessDeniedError("프로젝트 참여자만 이 연구노트를 볼 수 있습니다")
 
     if manage and project.owner_member_id != company_member.id:
-        raise ResearchNoteManageDeniedError("Only the project lead or company owner can manage this research note")
+        raise ResearchNoteManageDeniedError("이 연구노트는 프로젝트 책임자나 기관 관리자만 관리할 수 있습니다")
 
     return company_member
 
@@ -183,7 +183,7 @@ def _validate_member_for_project(db: Session, *, member_id: int | None, project:
         return
     member = db.get(CompanyMemberORM, member_id)
     if member is None or member.company_id != project.company_id:
-        raise ValueError("Selected member must belong to this project company")
+        raise ValueError("선택한 연구원은 이 프로젝트의 기관 소속이어야 합니다")
 
 
 def _default_author_member_id(
@@ -208,7 +208,7 @@ def _default_author_member_id(
     if requested_owner_member_id is not None:
         _validate_member_for_project(db, member_id=requested_owner_member_id, project=project)
         return requested_owner_member_id
-    raise ValueError("Author member is required")
+    raise ValueError("작성자를 지정하세요")
 
 
 def create_research_note(db: Session, current_user: UserAccount, **kwargs) -> ResearchNoteORM:
@@ -223,6 +223,11 @@ def create_research_note(db: Session, current_user: UserAccount, **kwargs) -> Re
     )
     reviewer_member_id = kwargs.get("reviewer_member_id") or project.owner_member_id
     _validate_member_for_project(db, member_id=reviewer_member_id, project=project)
+    bundle_id = kwargs.get("bundle_id") or None
+    if bundle_id is not None:
+        from app.domain.research_notes.bundles import require_bundle_in_project
+
+        require_bundle_in_project(db, bundle_id, project.id)
 
     note = ResearchNoteORM(
         project_id=project.id,
@@ -234,6 +239,7 @@ def create_research_note(db: Session, current_user: UserAccount, **kwargs) -> Re
         reviewer_member_id=reviewer_member_id,
         reviewed_date=kwargs.get("reviewed_date"),
         last_updated_by=current_user.id,
+        bundle_id=bundle_id,
     )
     db.add(note)
     db.commit()
@@ -285,17 +291,17 @@ def update_research_note(db: Session, note_id: str, current_user: UserAccount, *
     is_author = company_member is not None and company_member.id == note.owner_member_id
 
     if note.status not in EDITABLE_NOTE_STATUSES and not can_manage:
-        raise ResearchNoteStateError("Submitted or approved notes cannot be edited")
+        raise ResearchNoteStateError("제출되었거나 승인된 노트는 편집할 수 없습니다")
     if not can_manage and not is_author:
-        raise ResearchNoteManageDeniedError("Only the author, project lead, or company owner can edit this note")
+        raise ResearchNoteManageDeniedError("작성자, 프로젝트 책임자, 기관 관리자만 이 노트를 편집할 수 있습니다")
 
     if "owner_member_id" in kwargs and kwargs["owner_member_id"] is not None:
         if not can_manage:
-            raise ResearchNoteManageDeniedError("Only the project lead or company owner can change the author")
+            raise ResearchNoteManageDeniedError("작성자는 프로젝트 책임자나 기관 관리자만 바꿀 수 있습니다")
         _validate_member_for_project(db, member_id=kwargs["owner_member_id"], project=project)
     if "reviewer_member_id" in kwargs and kwargs["reviewer_member_id"] is not None:
         if not can_manage:
-            raise ResearchNoteManageDeniedError("Only the project lead or company owner can change the reviewer")
+            raise ResearchNoteManageDeniedError("검토자는 프로젝트 책임자나 기관 관리자만 바꿀 수 있습니다")
         _validate_member_for_project(db, member_id=kwargs["reviewer_member_id"], project=project)
 
     kwargs.pop("last_updated_by", None)
@@ -318,7 +324,7 @@ def assign_research_note_members(
     note = _get_note(db, note_id)
     project, _company_member = _require_note_access(db, note, current_user, manage=True)
     if note.status not in EDITABLE_NOTE_STATUSES:
-        raise ResearchNoteStateError("Submitted or approved notes cannot be reassigned")
+        raise ResearchNoteStateError("제출되었거나 승인된 노트는 담당자를 바꿀 수 없습니다")
 
     _validate_member_for_project(db, member_id=author_member_id, project=project)
     if reviewer_member_id is not None:
@@ -368,18 +374,18 @@ def _detect_file_type(mime_type: str, original_name: str) -> str:
 def _ensure_upload_allowed(file_type: str, file_bytes: bytes) -> None:
     settings = get_settings()
     if len(file_bytes) > settings.max_upload_bytes:
-        raise FileUploadLimitError(f"Upload exceeds {settings.max_upload_bytes} bytes")
+        raise FileUploadLimitError(f"파일 크기는 {settings.max_upload_bytes}바이트를 넘을 수 없습니다")
     if file_type == "pdf":
         try:
             import fitz
 
             with fitz.open(stream=file_bytes, filetype="pdf") as document:
                 if document.page_count > settings.max_pdf_pages:
-                    raise FileUploadLimitError(f"PDF exceeds {settings.max_pdf_pages} pages")
+                    raise FileUploadLimitError(f"PDF는 최대 {settings.max_pdf_pages}페이지까지 올릴 수 있습니다")
         except FileUploadLimitError:
             raise
         except Exception as exc:
-            raise UnsupportedFileTypeError("Invalid PDF file") from exc
+            raise UnsupportedFileTypeError("올바른 PDF 파일이 아닙니다") from exc
 
 
 def _create_asset_version(
@@ -448,9 +454,9 @@ def upload_note_file(
     can_manage = _can_manage_note(current_user, project, company_member)
     is_author = company_member is not None and company_member.id == note.owner_member_id
     if note.status not in EDITABLE_NOTE_STATUSES:
-        raise ResearchNoteStateError("Files can only be uploaded to draft, rejected, or reopened notes")
+        raise ResearchNoteStateError("파일은 초안, 반려, 재개 상태의 노트에만 올릴 수 있습니다")
     if not can_manage and not is_author:
-        raise ResearchNoteManageDeniedError("Only the author, project lead, or company owner can upload files")
+        raise ResearchNoteManageDeniedError("작성자, 프로젝트 책임자, 기관 관리자만 파일을 올릴 수 있습니다")
 
     file_type = _detect_file_type(mime_type, original_name)
     _ensure_upload_allowed(file_type, file_bytes)
@@ -608,13 +614,13 @@ def replace_note_page_asset(
     can_manage = _can_manage_note(current_user, project, company_member)
     is_author = company_member is not None and company_member.id == note.owner_member_id
     if note.status not in EDITABLE_NOTE_STATUSES:
-        raise ResearchNoteStateError("Approved or submitted pages cannot be replaced")
+        raise ResearchNoteStateError("제출되었거나 승인된 페이지는 교체할 수 없습니다")
     if not can_manage and not is_author:
-        raise ResearchNoteManageDeniedError("Only the author, project lead, or company owner can replace page images")
+        raise ResearchNoteManageDeniedError("작성자, 프로젝트 책임자, 기관 관리자만 페이지 이미지를 교체할 수 있습니다")
 
     file_type = _detect_file_type(mime_type, original_name)
     if file_type != "image":
-        raise UnsupportedFileTypeError("Only images can replace a page asset")
+        raise UnsupportedFileTypeError("페이지는 이미지로만 교체할 수 있습니다")
     _ensure_upload_allowed(file_type, file_bytes)
     storage = LocalStorageService()
     page.image_storage_key = storage.save_bytes(
@@ -730,7 +736,7 @@ def _record_approval_event(
 def _ensure_latest_document_for_action(db: Session, note_id: str) -> ResearchNoteDocumentORM:
     document = _latest_document(db, note_id)
     if document is None:
-        raise ResearchNoteStateError("Create and save a note document before submitting")
+        raise ResearchNoteStateError("제출하기 전에 노트 문서를 만들고 저장하세요")
     return document
 
 
@@ -746,9 +752,12 @@ def submit_research_note(
     can_manage = _can_manage_note(current_user, project, company_member)
     is_author = company_member is not None and company_member.id == note.owner_member_id
     if not can_manage and not is_author:
-        raise ResearchNoteManageDeniedError("Only the author, project lead, or company owner can submit this note")
+        raise ResearchNoteManageDeniedError("작성자, 프로젝트 책임자, 기관 관리자만 이 노트를 제출할 수 있습니다")
     if note.status not in EDITABLE_NOTE_STATUSES:
-        raise ResearchNoteStateError("Only draft, rejected, or reopened notes can be submitted")
+        raise ResearchNoteStateError("초안, 반려, 재개 상태의 노트만 제출할 수 있습니다")
+    from app.domain.research_notes.ai_review import ensure_ai_review_done
+
+    ensure_ai_review_done(db, note_id)
 
     document = _ensure_latest_document_for_action(db, note_id)
     snapshot = _create_signature_snapshot(
@@ -789,9 +798,9 @@ def approve_research_note(
     can_manage = _can_manage_note(current_user, project, company_member)
     is_reviewer = company_member is not None and note.reviewer_member_id == company_member.id
     if not can_manage and not is_reviewer:
-        raise ResearchNoteManageDeniedError("Only the assigned reviewer, project lead, or company owner can approve this note")
+        raise ResearchNoteManageDeniedError("지정된 검토자, 프로젝트 책임자, 기관 관리자만 이 노트를 승인할 수 있습니다")
     if note.status != "submitted":
-        raise ResearchNoteStateError("Only submitted notes can be approved")
+        raise ResearchNoteStateError("제출된 노트만 승인할 수 있습니다")
 
     document = _ensure_latest_document_for_action(db, note_id)
     snapshot = _create_signature_snapshot(
@@ -829,15 +838,15 @@ def reject_research_note(
     comment: str | None,
 ) -> ResearchNoteApprovalEventORM:
     if not comment or not comment.strip():
-        raise ResearchNoteStateError("A rejection comment is required")
+        raise ResearchNoteStateError("반려 사유를 입력하세요")
     note = _get_note(db, note_id)
     project, company_member = _require_note_access(db, note, current_user)
     can_manage = _can_manage_note(current_user, project, company_member)
     is_reviewer = company_member is not None and note.reviewer_member_id == company_member.id
     if not can_manage and not is_reviewer:
-        raise ResearchNoteManageDeniedError("Only the assigned reviewer, project lead, or company owner can reject this note")
+        raise ResearchNoteManageDeniedError("지정된 검토자, 프로젝트 책임자, 기관 관리자만 이 노트를 반려할 수 있습니다")
     if note.status != "submitted":
-        raise ResearchNoteStateError("Only submitted notes can be rejected")
+        raise ResearchNoteStateError("제출된 노트만 반려할 수 있습니다")
 
     document = _ensure_latest_document_for_action(db, note_id)
     event = _record_approval_event(
@@ -866,11 +875,11 @@ def reopen_research_note(
     comment: str | None,
 ) -> ResearchNoteApprovalEventORM:
     if not comment or not comment.strip():
-        raise ResearchNoteStateError("A reopen reason is required")
+        raise ResearchNoteStateError("재개 사유를 입력하세요")
     note = _get_note(db, note_id)
     project, company_member = _require_note_access(db, note, current_user, manage=True)
     if note.status != "approved":
-        raise ResearchNoteStateError("Only approved notes can be reopened")
+        raise ResearchNoteStateError("승인된 노트만 재개할 수 있습니다")
     document = _ensure_latest_document_for_action(db, note_id)
     event = _record_approval_event(
         db,

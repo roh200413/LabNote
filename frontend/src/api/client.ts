@@ -15,21 +15,25 @@ export function setAccessToken(token: string | null): void {
   window.localStorage.removeItem(AUTH_TOKEN_KEY);
 }
 
-export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const headers = new Headers(init.headers);
+export async function apiFetch(
+  path: string,
+  init: RequestInit & { timeoutMs?: number } = {}
+): Promise<Response> {
+  const { timeoutMs = API_TIMEOUT_MS, ...requestInit } = init;
+  const headers = new Headers(requestInit.headers);
   const token = getAccessToken();
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
 
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    return await fetch(`${API_BASE_URL}${path}`, { ...init, headers, signal: controller.signal });
+    return await fetch(`${API_BASE_URL}${path}`, { ...requestInit, headers, signal: controller.signal });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
-      throw new Error("Backend request timed out. Check whether the API server is running.");
+      throw new Error("서버 응답 시간이 초과되었습니다. API 서버가 실행 중인지 확인하세요.");
     }
     throw error;
   } finally {

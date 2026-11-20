@@ -3,3 +3,12 @@ __pycache__/
 .venv/
 node_modules/
 .env
+backend/.llm-encryption.key
+backend/.pytest-llm*
+output/playwright/
+.playwright-cli/
+
+# Local data: dev database, uploaded files and signatures
+backend/storage/
+*.db
+*.sqlite3

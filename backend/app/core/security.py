@@ -65,5 +65,5 @@ def decode_access_token(token: str) -> dict[str, str | int]:
 
     payload = json.loads(_b64url_decode(payload_segment).decode())
     if int(payload["exp"]) < int(datetime.now(timezone.utc).timestamp()):
-        raise ValueError("Token expired")
+        raise ValueError("로그인이 만료되었습니다")
     return payload

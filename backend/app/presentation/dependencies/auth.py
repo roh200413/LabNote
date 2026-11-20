@@ -14,17 +14,17 @@ def get_current_user(
     db: Session = Depends(get_db),
 ):
     if not credentials:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="로그인이 필요합니다")
 
     try:
         payload = decode_access_token(credentials.credentials)
         user_id = int(payload["sub"])
         return get_user_by_id(db, user_id)
     except (ValueError, UserNotFoundError) as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token") from exc
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="로그인이 만료되었거나 올바르지 않습니다") from exc
 
 
 def get_current_admin(current_user=Depends(get_current_user)):
     if not current_user.is_system_admin:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="관리자 권한이 필요합니다")
     return current_user

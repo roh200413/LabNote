@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class CompanyMemberDirectoryResponse(BaseModel):
@@ -34,3 +34,36 @@ class ResearcherCompanyResponse(BaseModel):
 class ResearcherManagementResponse(BaseModel):
     company: ResearcherCompanyResponse
     members: list[CompanyMemberDirectoryResponse]
+    pending_requests: list["ResearcherMembershipRequestResponse"] = []
+
+
+class ResearcherMembershipRequestResponse(BaseModel):
+    request_id: int
+    user_id: int
+    name: str
+    email: str
+    requested_at: str | None
+
+
+class ResearcherRegisterRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    email: str = Field(min_length=3, max_length=254)
+    password: str | None = Field(default=None, max_length=128)
+
+
+class ResearcherRegisterResponse(BaseModel):
+    company_member_id: int
+    user_id: int
+    name: str
+    email: str
+    temporary_password: str | None = None
+
+
+class ResearcherApprovalResponse(BaseModel):
+    company_member_id: int
+    user_id: int
+    name: str
+    email: str
+
+
+ResearcherManagementResponse.model_rebuild()

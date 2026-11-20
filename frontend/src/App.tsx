@@ -2,6 +2,9 @@ import { FormEvent, useEffect, useState } from "react";
 
 import { getMe, login, signUp, type AuthUser } from "./api/auth";
 import { setAccessToken } from "./api/client";
+import type { SearchNavigation } from "./api/search";
+import { FeedbackButton } from "./components/FeedbackButton";
+import { GlobalSearch } from "./components/GlobalSearch";
 import { MainLayout } from "./layout/MainLayout";
 import { AdminPage } from "./pages/AdminPage";
 import { HomePage } from "./pages/HomePage";
@@ -9,6 +12,7 @@ import { HomePage } from "./pages/HomePage";
 export default function App() {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [profileOpenToken, setProfileOpenToken] = useState(0);
+  const [searchRequest, setSearchRequest] = useState<{ token: number; target: SearchNavigation } | null>(null);
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -67,7 +71,7 @@ export default function App() {
       if (result.access_token) {
         setCurrentUser(result.user);
       } else {
-        setNotice(result.message ?? "Signup completed.");
+        setNotice(result.message ?? "회원가입이 완료되었습니다.");
         setMode("login");
       }
       setPassword("");
@@ -92,7 +96,7 @@ export default function App() {
       <MainLayout>
         <section className="auth-shell">
           <div className="auth-card">
-            <p>Loading...</p>
+            <p>불러오는 중...</p>
           </div>
         </section>
       </MainLayout>
@@ -106,8 +110,8 @@ export default function App() {
           <section className="admin-entry-shell">
             <div className="admin-entry-card">
               <aside className="admin-entry-visual">
-                <p className="eyebrow">Admin Console</p>
-                <h2>System Admin</h2>
+                <p className="eyebrow">관리자 콘솔</p>
+                <h2>시스템 관리자</h2>
                 <div className="admin-entry-grid" aria-hidden="true">
                   <span />
                   <span />
@@ -117,21 +121,21 @@ export default function App() {
                   <span />
                 </div>
                 <div className="admin-entry-tags">
-                  <span>Organizations</span>
-                  <span>Users</span>
-                  <span>Approvals</span>
+                  <span>기관</span>
+                  <span>사용자</span>
+                  <span>승인</span>
                 </div>
               </aside>
               <div className="admin-entry-form">
-                <p className="eyebrow">Secure sign in</p>
-                <h2>Administrator login</h2>
+                <p className="eyebrow">보안 로그인</p>
+                <h2>관리자 로그인</h2>
                 <form onSubmit={onSubmit} className="form-stack">
                   <label>
-                    Email
+                    이메일
                     <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
                   </label>
                   <label>
-                    Password
+                    비밀번호
                     <input
                       type="password"
                       value={password}
@@ -140,7 +144,7 @@ export default function App() {
                       required
                     />
                   </label>
-                  <button type="submit">Log in</button>
+                  <button type="submit">로그인</button>
                 </form>
                 {error && <p className="error">{error}</p>}
               </div>
@@ -156,7 +160,7 @@ export default function App() {
           <div className="admin-entry-card workspace-entry-card">
             <aside className="admin-entry-visual workspace-entry-visual">
               <div>
-                <p className="eyebrow">Research Workspace</p>
+                <p className="eyebrow">연구 작업 공간</p>
                 <h2>LabNote</h2>
               </div>
               <div className="admin-entry-grid" aria-hidden="true">
@@ -168,35 +172,35 @@ export default function App() {
                 <span />
               </div>
               <div className="admin-entry-tags">
-                <span>Projects</span>
-                <span>Research Notes</span>
-                <span>Approvals</span>
+                <span>프로젝트</span>
+                <span>연구노트</span>
+                <span>승인</span>
               </div>
             </aside>
             <div className="admin-entry-form workspace-entry-form">
-              <p className="eyebrow">{mode === "login" ? "Secure sign in" : "Create workspace access"}</p>
-              <h2>{mode === "login" ? "Log in to LabNote" : "Create account"}</h2>
+              <p className="eyebrow">{mode === "login" ? "보안 로그인" : "작업 공간 가입"}</p>
+              <h2>{mode === "login" ? "LabNote 로그인" : "계정 만들기"}</h2>
 
               <form onSubmit={onSubmit} className="form-stack">
                 {mode === "signup" && (
                   <>
                     <label>
-                      Sign up as
+                      가입 유형
                       <select
                         value={accountType}
                         onChange={(e) => setAccountType(e.target.value as "owner" | "user")}
                       >
-                        <option value="user">User</option>
-                        <option value="owner">Organization owner</option>
+                        <option value="user">사용자</option>
+                        <option value="owner">기관 관리자</option>
                       </select>
                     </label>
                     <label>
-                      Name
+                      이름
                       <input value={name} onChange={(e) => setName(e.target.value)} required />
                     </label>
                     {accountType === "owner" && (
                       <label>
-                        Organization name
+                        기관명
                         <input
                           value={organizationName}
                           onChange={(e) => setOrganizationName(e.target.value)}
@@ -207,31 +211,31 @@ export default function App() {
                     {accountType === "user" && (
                       <>
                         <label>
-                          Organization name (optional)
+                          기관명 (선택)
                           <input
                             value={organizationName}
                             onChange={(e) => setOrganizationName(e.target.value)}
                           />
                         </label>
                         <label>
-                          Organization code (optional)
+                          기관 코드 (선택)
                           <input
                             value={organizationCode}
                             onChange={(e) => setOrganizationCode(e.target.value.toUpperCase())}
                             placeholder="9 characters"
                           />
                         </label>
-                        <p className="auth-help">Leave both fields empty for a standalone user account. Enter the company code only when you want to join a company.</p>
+                        <p className="auth-help">개인 계정은 두 칸을 비워 두세요. 기관에 가입하려면 기관 코드만 입력하세요.</p>
                       </>
                     )}
                   </>
                 )}
                 <label>
-                  Email
+                  이메일
                   <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
                 </label>
                 <label>
-                  Password
+                  비밀번호
                   <input
                     type="password"
                     value={password}
@@ -240,11 +244,11 @@ export default function App() {
                     required
                   />
                 </label>
-                <button type="submit">{mode === "login" ? "Log in" : "Create account"}</button>
+                <button type="submit">{mode === "login" ? "로그인" : "계정 만들기"}</button>
               </form>
 
               <button className="secondary-button workspace-entry-switch" onClick={() => setMode(mode === "login" ? "signup" : "login")}>
-                {mode === "login" ? "Need an account? Sign up" : "Already have an account? Log in"}
+                {mode === "login" ? "계정이 없나요? 회원가입" : "이미 계정이 있나요? 로그인"}
               </button>
 
               {error && <p className="error">{error}</p>}
@@ -265,7 +269,7 @@ export default function App() {
         onLogout={onLogout}
         onOpenProfile={onOpenProfile}
       >
-        <AdminPage />
+        <AdminPage currentUserId={currentUser.id} />
       </MainLayout>
     ) : (
       <MainLayout
@@ -274,11 +278,18 @@ export default function App() {
         showWorkspaceTools={false}
         onLogout={onLogout}
         onOpenProfile={onOpenProfile}
+        actions={<FeedbackButton />}
+        search={
+          currentUser.organization_id || currentUser.is_org_owner ? (
+            <GlobalSearch onNavigate={(target) => setSearchRequest({ token: Date.now(), target })} />
+          ) : undefined
+        }
       >
         <HomePage
           currentUser={currentUser}
           onCurrentUserChange={setCurrentUser}
           openProfileToken={profileOpenToken}
+          searchRequest={searchRequest}
         />
       </MainLayout>
     )

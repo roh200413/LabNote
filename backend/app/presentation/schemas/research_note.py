@@ -13,6 +13,7 @@ class ResearchNoteCreateRequest(BaseModel):
     reviewer_member_id: int | None = None
     reviewed_date: date | None = None
     last_updated_by: int | None = None
+    bundle_id: str | None = None
 
 
 class ResearchNoteUpdateRequest(BaseModel):
@@ -49,6 +50,7 @@ class ResearchNoteResponse(BaseModel):
     reviewed_date: date | None
     last_updated_by: int | None
     is_deleted: bool
+    bundle_id: str | None = None
 
 
 class ResearchNoteApprovalEventResponse(BaseModel):

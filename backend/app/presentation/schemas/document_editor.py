@@ -8,6 +8,7 @@ class TextStyleSchema(BaseModel):
     font_size: int = Field(default=16, alias="fontSize")
     font_weight: Literal["normal", "bold"] = Field(default="normal", alias="fontWeight")
     text_align: Literal["left", "center", "right"] = Field(default="left", alias="textAlign")
+    color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
 
     model_config = {"populate_by_name": True}
 
@@ -130,3 +131,31 @@ class ResearchNoteExportResponse(BaseModel):
     error_message: str | None
     created_at: datetime
     completed_at: datetime | None
+
+
+class NoteGenerationStatusResponse(BaseModel):
+    enabled: bool
+    provider: str
+    model: str | None = None
+    max_pages: int
+
+
+class NoteGenerationRequest(BaseModel):
+    note_id: str = Field(alias="noteId")
+    page_ids: list[int] = Field(default_factory=list, alias="pageIds")
+    memo: str = Field(default="", max_length=8000)
+    language: Literal["ko", "en"] = "ko"
+    existing_text: str = Field(default="", alias="existingText", max_length=20000)
+
+    model_config = {"populate_by_name": True}
+
+
+class GeneratedSectionSchema(BaseModel):
+    heading: str
+    body: str
+
+
+class NoteGenerationResponse(BaseModel):
+    sections: list[GeneratedSectionSchema]
+    text: str
+    model: str

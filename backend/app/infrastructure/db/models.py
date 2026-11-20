@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from uuid import uuid4
 
 from sqlalchemy import (
@@ -150,11 +150,57 @@ class ProjectNoteCoverORM(Base):
     show_period: Mapped[bool] = mapped_column(BOOLEAN, nullable=False, default=True)
 
 
+class CompanyNoteFormatORM(Base):
+    """Company-wide research note format (sections, layout, labels, fonts) stored as JSON."""
+
+    __tablename__ = "company_note_format"
+
+    id: Mapped[int] = mapped_column(SQLITE_PK, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    company_id: Mapped[int] = mapped_column(
+        BIGINT, ForeignKey("company.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
+    )
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_by: Mapped[int | None] = mapped_column(
+        BIGINT, ForeignKey("useraccount.id", ondelete="SET NULL"), nullable=True
+    )
+
+
+class ResearchNoteBundleORM(Base):
+    """A named group of notes inside a project (e.g. one experiment, or everything from GitHub)."""
+
+    __tablename__ = "research_note_bundle"
+    __table_args__ = (UniqueConstraint("project_id", "name", name="uq_research_note_bundle_name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("project.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[int | None] = mapped_column(
+        BIGINT, ForeignKey("useraccount.id", ondelete="SET NULL"), nullable=True
+    )
+
+
 class ResearchNoteORM(Base):
     __tablename__ = "research_note"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Set in Python (with microseconds) so notes made in the same second, e.g. from one split PDF
+    # or a bulk upload, keep their creation order; SQLite's CURRENT_TIMESTAMP only has seconds.
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now()
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -176,6 +222,9 @@ class ResearchNoteORM(Base):
         BIGINT, ForeignKey("useraccount.id", ondelete="SET NULL"), nullable=True
     )
     is_deleted: Mapped[bool] = mapped_column(BOOLEAN, nullable=False, default=False)
+    bundle_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("research_note_bundle.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
 
 class ResearchNoteDocumentORM(Base):
@@ -411,6 +460,49 @@ class GitHubRepositoryIntegrationORM(Base):
     notes: Mapped[str | None] = mapped_column(Text)
 
 
+class GitHubAccountConnectionORM(Base):
+    """The GitHub account a company connected; its token is used to list repos and add webhooks."""
+
+    __tablename__ = "github_account_connection"
+
+    company_id: Mapped[int] = mapped_column(
+        BIGINT, ForeignKey("company.id", ondelete="CASCADE"), primary_key=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    login: Mapped[str] = mapped_column(String(120), nullable=False)
+    display_name: Mapped[str | None] = mapped_column(String(255))
+    avatar_url: Mapped[str | None] = mapped_column(String(500))
+    profile_url: Mapped[str | None] = mapped_column(String(500))
+    scopes: Mapped[str | None] = mapped_column(String(500))
+    encrypted_token: Mapped[str] = mapped_column(Text, nullable=False)
+    connected_by: Mapped[int | None] = mapped_column(
+        BIGINT, ForeignKey("useraccount.id", ondelete="SET NULL"), nullable=True
+    )
+    # "token": a personal access token above. "app": the LabNote GitHub App is installed on the
+    # account below and short-lived installation tokens are minted per request.
+    auth_type: Mapped[str] = mapped_column(String(20), nullable=False, default="token", server_default="token")
+    installation_id: Mapped[int | None] = mapped_column(BIGINT, nullable=True)
+    account_type: Mapped[str | None] = mapped_column(String(20))
+
+
+class GitHubUserIdentityORM(Base):
+    """A LabNote user's own GitHub login, so commits and PRs can be credited to the right researcher."""
+
+    __tablename__ = "github_user_identity"
+
+    user_id: Mapped[int] = mapped_column(
+        BIGINT, ForeignKey("useraccount.id", ondelete="CASCADE"), primary_key=True
+    )
+    github_id: Mapped[int] = mapped_column(BIGINT, nullable=False, unique=True)
+    login: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    avatar_url: Mapped[str | None] = mapped_column(String(500))
+    profile_url: Mapped[str | None] = mapped_column(String(500))
+    linked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class GitHubProjectMappingORM(Base):
     __tablename__ = "github_project_mapping"
 
@@ -435,6 +527,10 @@ class GitHubProjectMappingORM(Base):
         BIGINT, ForeignKey("company_member.id", ondelete="SET NULL"), nullable=True
     )
     is_active: Mapped[bool] = mapped_column(BOOLEAN, nullable=False, default=True)
+    # Notes made from this repository go into this bundle (optional).
+    bundle_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("research_note_bundle.id", ondelete="SET NULL"), nullable=True
+    )
 
 
 class GitHubEventORM(Base):
@@ -477,6 +573,97 @@ class GitHubGeneratedNoteORM(Base):
         String(36), ForeignKey("research_note.id", ondelete="CASCADE"), nullable=False, index=True
     )
     generation_type: Mapped[str] = mapped_column(String(40), nullable=False, default="automatic")
+    # Set when the note text was written by an LLM; such notes need a person's review before submission.
+    review_required: Mapped[bool] = mapped_column(BOOLEAN, nullable=False, default=False)
+    ai_model: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    reviewed_by: Mapped[int | None] = mapped_column(
+        BIGINT, ForeignKey("useraccount.id", ondelete="SET NULL"), nullable=True
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ProjectActivityRuleORM(Base):
+    """When a project member counts as "needs attention" on the dashboard. 0 days turns a check off."""
+
+    __tablename__ = "project_activity_rule"
+
+    project_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("project.id", ondelete="CASCADE"), primary_key=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    inactive_days: Mapped[int] = mapped_column(INTEGER, nullable=False, default=14)
+    stale_draft_days: Mapped[int] = mapped_column(INTEGER, nullable=False, default=7)
+    review_wait_days: Mapped[int] = mapped_column(INTEGER, nullable=False, default=7)
+    check_rejected: Mapped[bool] = mapped_column(BOOLEAN, nullable=False, default=True)
+    check_monthly_pace: Mapped[bool] = mapped_column(BOOLEAN, nullable=False, default=True)
+    updated_by: Mapped[int | None] = mapped_column(
+        BIGINT, ForeignKey("useraccount.id", ondelete="SET NULL"), nullable=True
+    )
+
+
+class ProjectDataFileORM(Base):
+    """Raw research data kept per project (NAS-like), separate from research notes."""
+
+    __tablename__ = "project_data_file"
+
+    id: Mapped[int] = mapped_column(SQLITE_PK, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    project_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("project.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    folder: Mapped[str] = mapped_column(String(500), nullable=False, default="", index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    size: Mapped[int] = mapped_column(BIGINT, nullable=False, default=0)
+    mime_type: Mapped[str] = mapped_column(String(120), nullable=False, default="application/octet-stream")
+    storage_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    checksum: Mapped[str | None] = mapped_column(String(64))
+    uploaded_by: Mapped[int | None] = mapped_column(
+        BIGINT, ForeignKey("useraccount.id", ondelete="SET NULL"), nullable=True
+    )
+
+
+class ProjectDataFolderORM(Base):
+    """Folders created explicitly (so an empty folder can exist); file folders also appear implicitly."""
+
+    __tablename__ = "project_data_folder"
+    __table_args__ = (UniqueConstraint("project_id", "path", name="uq_project_data_folder"),)
+
+    id: Mapped[int] = mapped_column(SQLITE_PK, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    project_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("project.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    path: Mapped[str] = mapped_column(String(500), nullable=False)
+
+
+class UserFeedbackORM(Base):
+    """Complaints, bug reports and suggestions sent by users; answered from the admin console."""
+
+    __tablename__ = "user_feedback"
+
+    id: Mapped[int] = mapped_column(SQLITE_PK, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    user_id: Mapped[int] = mapped_column(
+        BIGINT, ForeignKey("useraccount.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    company_id: Mapped[int | None] = mapped_column(
+        BIGINT, ForeignKey("company.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    category: Mapped[str] = mapped_column(String(20), nullable=False, default="improvement")
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    page: Mapped[str | None] = mapped_column(String(200))
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="open", index=True)
+    admin_reply: Mapped[str | None] = mapped_column(Text)
+    replied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    replied_by: Mapped[int | None] = mapped_column(
+        BIGINT, ForeignKey("useraccount.id", ondelete="SET NULL"), nullable=True
+    )
 
 
 class AuditLogORM(Base):

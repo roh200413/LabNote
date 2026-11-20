@@ -1,5 +1,18 @@
 import { apiFetch } from "./client";
 
+/** Throws with the server's `detail` message when there is one, otherwise the fallback. */
+async function ensureOk(response: Response, fallback: string): Promise<void> {
+  if (response.ok) return;
+  let message = fallback;
+  try {
+    const body = await response.json();
+    if (typeof body?.detail === "string") message = body.detail;
+  } catch {
+    // keep the fallback message
+  }
+  throw new Error(message);
+}
+
 export type AdminDashboard = {
   total_users: number;
   total_organizations: number;
@@ -40,13 +53,13 @@ export type Organization = {
 
 export async function getAdminDashboard(): Promise<AdminDashboard> {
   const response = await apiFetch("/admin/dashboard");
-  if (!response.ok) throw new Error("Failed to load dashboard");
+  if (!response.ok) throw new Error("대시보드를 불러오지 못했습니다");
   return response.json();
 }
 
 export async function listAdminUsers(): Promise<AdminUser[]> {
   const response = await apiFetch("/admin/users");
-  if (!response.ok) throw new Error("Failed to load users");
+  if (!response.ok) throw new Error("사용자 목록을 불러오지 못했습니다");
   return response.json();
 }
 
@@ -59,46 +72,42 @@ export async function updateAdminUser(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error("Failed to update user");
+  await ensureOk(response, "사용자 수정에 실패했습니다");
   return response.json();
 }
 
 export async function listOrganizations(): Promise<Organization[]> {
   const response = await apiFetch("/admin/organizations");
-  if (!response.ok) throw new Error("Failed to load organizations");
+  if (!response.ok) throw new Error("기관 목록을 불러오지 못했습니다");
   return response.json();
 }
 
 export async function listPendingOrganizations(): Promise<Organization[]> {
   const response = await apiFetch("/admin/organizations/pending");
-  if (!response.ok) throw new Error("Failed to load pending organizations");
+  if (!response.ok) throw new Error("승인 대기 기관을 불러오지 못했습니다");
   return response.json();
 }
 
-export async function createOrganization(payload: {
-  name: string;
-  code: string;
-  description?: string;
-}): Promise<Organization> {
+export async function createOrganization(payload: { name: string; code?: string }): Promise<Organization> {
   const response = await apiFetch("/admin/organizations", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error("Failed to create organization");
+  await ensureOk(response, "기관 생성에 실패했습니다");
   return response.json();
 }
 
 export async function updateOrganization(
   organizationId: number,
-  payload: Partial<Pick<Organization, "name" | "code" | "description" | "is_active">>
+  payload: Partial<Pick<Organization, "name" | "code" | "is_active">>
 ): Promise<Organization> {
   const response = await apiFetch(`/admin/organizations/${organizationId}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error("Failed to update organization");
+  await ensureOk(response, "기관 수정에 실패했습니다");
   return response.json();
 }
 
@@ -106,7 +115,7 @@ export async function approveOrganization(organizationId: number): Promise<Organ
   const response = await apiFetch(`/admin/organizations/${organizationId}/approve`, {
     method: "POST",
   });
-  if (!response.ok) throw new Error("Failed to approve organization");
+  await ensureOk(response, "기관 승인에 실패했습니다");
   return response.json();
 }
 
@@ -114,6 +123,50 @@ export async function rejectOrganization(organizationId: number): Promise<Organi
   const response = await apiFetch(`/admin/organizations/${organizationId}/reject`, {
     method: "POST",
   });
-  if (!response.ok) throw new Error("Failed to reject organization");
+  await ensureOk(response, "기관 반려에 실패했습니다");
+  return response.json();
+}
+
+export async function createAdminUser(payload: {
+  name: string;
+  email: string;
+  password?: string;
+  organization_id?: number | null;
+  role: "member" | "owner";
+}): Promise<{ user: AdminUser; temporary_password: string | null }> {
+  const response = await apiFetch("/admin/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    let message = "사용자 등록에 실패했습니다";
+    try {
+      const body = await response.json();
+      if (typeof body?.detail === "string") message = body.detail;
+    } catch {
+      // keep the generic message
+    }
+    throw new Error(message);
+  }
+  return response.json();
+}
+
+export async function setAdminUserOrganizationRole(userId: number, role: "member" | "owner"): Promise<AdminUser> {
+  const response = await apiFetch(`/admin/users/${userId}/organization-role`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ role }),
+  });
+  if (!response.ok) {
+    let message = "기관 역할을 바꾸지 못했습니다";
+    try {
+      const body = await response.json();
+      if (typeof body?.detail === "string") message = body.detail;
+    } catch {
+      // keep the generic message
+    }
+    throw new Error(message);
+  }
   return response.json();
 }

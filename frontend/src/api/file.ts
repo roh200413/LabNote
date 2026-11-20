@@ -58,20 +58,20 @@ export async function uploadNoteFile(
 
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
-    throw new Error(payload?.detail ?? "Failed to upload file");
+    throw new Error(payload?.detail ?? "파일 업로드에 실패했습니다");
   }
   return response.json();
 }
 
 export async function listNoteFiles(noteId: string): Promise<NoteFile[]> {
   const response = await apiFetch(`/research-note-files/notes/${noteId}`);
-  if (!response.ok) throw new Error("Failed to fetch note files");
+  if (!response.ok) throw new Error("노트 파일을 불러오지 못했습니다");
   return response.json();
 }
 
 export async function listNotePages(fileId: number): Promise<NotePage[]> {
   const response = await apiFetch(`/research-note-files/${fileId}/pages`);
-  if (!response.ok) throw new Error("Failed to fetch note pages");
+  if (!response.ok) throw new Error("노트 페이지를 불러오지 못했습니다");
   return response.json();
 }
 
@@ -93,7 +93,7 @@ export async function replaceNotePageAsset(
 
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
-    throw new Error(payload?.detail ?? "Failed to replace page image");
+    throw new Error(payload?.detail ?? "페이지 이미지 교체에 실패했습니다");
   }
   return response.json();
 }

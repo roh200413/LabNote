@@ -152,6 +152,42 @@ def ensure_schema_extensions(engine: Engine) -> None:
             sqlite_definition="reviewed_date DATE",
             postgres_definition="reviewed_date DATE",
         )
+        for column_name, sqlite_definition, postgres_definition in [
+            ("review_required", "review_required BOOLEAN NOT NULL DEFAULT 0", "review_required BOOLEAN NOT NULL DEFAULT FALSE"),
+            ("ai_model", "ai_model VARCHAR(200)", "ai_model VARCHAR(200)"),
+            ("reviewed_by", "reviewed_by BIGINT", "reviewed_by BIGINT"),
+            ("reviewed_at", "reviewed_at DATETIME", "reviewed_at TIMESTAMP WITH TIME ZONE"),
+        ]:
+            _add_column_if_missing(
+                connection,
+                dialect=dialect,
+                table_name="github_generated_note",
+                column_name=column_name,
+                sqlite_definition=sqlite_definition,
+                postgres_definition=postgres_definition,
+            )
+        for column_name, sqlite_definition, postgres_definition in [
+            ("auth_type", "auth_type VARCHAR(20) NOT NULL DEFAULT 'token'", "auth_type VARCHAR(20) NOT NULL DEFAULT 'token'"),
+            ("installation_id", "installation_id BIGINT", "installation_id BIGINT"),
+            ("account_type", "account_type VARCHAR(20)", "account_type VARCHAR(20)"),
+        ]:
+            _add_column_if_missing(
+                connection,
+                dialect=dialect,
+                table_name="github_account_connection",
+                column_name=column_name,
+                sqlite_definition=sqlite_definition,
+                postgres_definition=postgres_definition,
+            )
+        for table_name in ("research_note", "github_project_mapping"):
+            _add_column_if_missing(
+                connection,
+                dialect=dialect,
+                table_name=table_name,
+                column_name="bundle_id",
+                sqlite_definition="bundle_id VARCHAR(36)",
+                postgres_definition="bundle_id VARCHAR(36)",
+            )
         _add_column_if_missing(
             connection,
             dialect=dialect,
