@@ -9,6 +9,7 @@ simply go back to "no bundle".
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
+from app.domain.audit.note_log import record_note_event
 from app.domain.accounts.entities import UserAccount
 from app.domain.research_notes.use_cases import (
     ResearchNoteManageDeniedError,
@@ -155,6 +156,14 @@ def move_notes(db: Session, user: UserAccount, project_id: str, *, note_ids: lis
     if not can_manage and any(member is None or note.owner_member_id != member.id for note in notes):
         raise ResearchNoteManageDeniedError("다른 사람이 쓴 노트는 프로젝트 책임자나 기관 관리자만 옮길 수 있습니다")
     for note in notes:
+        if note.bundle_id != (bundle_id or None):
+            record_note_event(
+                db,
+                note=note,
+                actor_user_id=user.id,
+                action="note_move_bundle",
+                bundle_id={"from": note.bundle_id, "to": bundle_id or None},
+            )
         note.bundle_id = bundle_id or None
     db.commit()
     return len(notes)

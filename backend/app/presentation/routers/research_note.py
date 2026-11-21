@@ -13,6 +13,8 @@ from app.domain.research_notes.use_cases import (
     delete_research_note,
     get_research_note,
     list_approval_events,
+    list_note_audit_log,
+    list_project_audit_log,
     list_research_notes,
     reject_research_note,
     reopen_research_note,
@@ -134,6 +136,34 @@ def delete_research_note_endpoint(
     except (ResearchNoteAccessDeniedError, ResearchNoteManageDeniedError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/{note_id}/audit-log")
+def list_note_audit_log_endpoint(
+    note_id: str,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    try:
+        return list_note_audit_log(db, note_id, current_user)
+    except ResearchNoteNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="연구노트를 찾을 수 없습니다") from exc
+    except (ResearchNoteAccessDeniedError, ResearchNoteManageDeniedError) as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@router.get("/projects/{project_id}/audit-log")
+def list_project_audit_log_endpoint(
+    project_id: str,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    try:
+        return list_project_audit_log(db, project_id, current_user)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다") from exc
+    except (ResearchNoteAccessDeniedError, ResearchNoteManageDeniedError) as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.get("/{note_id}/approval-events", response_model=list[ResearchNoteApprovalEventResponse])

@@ -181,3 +181,26 @@ export async function splitPdfIntoNotes(payload: {
   if (!response.ok) throw new Error(await parseResearchNoteError(response, "PDF를 여러 노트로 나누지 못했습니다"));
   return response.json();
 }
+
+export type NoteAuditEntry = {
+  id: number;
+  created_at: string;
+  actor_name: string;
+  action: string;
+  action_label: string;
+  note_id: string;
+  note_title: string | null;
+  detail: Record<string, unknown>;
+};
+
+export async function listNoteAuditLog(noteId: string): Promise<NoteAuditEntry[]> {
+  const response = await apiFetch(`/research-notes/${noteId}/audit-log`);
+  if (!response.ok) throw new Error(await parseResearchNoteError(response, "변경 이력을 불러오지 못했습니다"));
+  return response.json();
+}
+
+export async function listProjectNoteAuditLog(projectId: string): Promise<NoteAuditEntry[]> {
+  const response = await apiFetch(`/research-notes/projects/${projectId}/audit-log`);
+  if (!response.ok) throw new Error(await parseResearchNoteError(response, "변경 이력을 불러오지 못했습니다"));
+  return response.json();
+}

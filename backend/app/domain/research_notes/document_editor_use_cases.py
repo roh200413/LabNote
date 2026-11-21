@@ -4,6 +4,7 @@ from copy import deepcopy
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.domain.audit.note_log import record_note_event
 from app.domain.accounts.entities import UserAccount
 from app.domain.research_notes.use_cases import (
     EDITABLE_NOTE_STATUSES,
@@ -163,6 +164,15 @@ def save_note_document(
             change_summary=change_summary,
         )
         note.last_updated_by = current_user.id
+        record_note_event(
+            db,
+            note=note,
+            actor_user_id=current_user.id,
+            action="note_document_save",
+            document_id=document.id,
+            revision_no=_latest_revision_no(db, document.id),
+            summary=change_summary,
+        )
         db.commit()
         db.refresh(document)
         return document
@@ -189,6 +199,15 @@ def save_note_document(
         change_summary=change_summary or "Initial document revision",
     )
     note.last_updated_by = current_user.id
+    record_note_event(
+        db,
+        note=note,
+        actor_user_id=current_user.id,
+        action="note_document_save",
+        document_id=document.id,
+        revision_no=1,
+        summary=change_summary or "Initial document revision",
+    )
     db.commit()
     db.refresh(document)
     return document

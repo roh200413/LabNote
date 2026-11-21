@@ -6,6 +6,7 @@ from datetime import date, datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.domain.audit.note_log import record_note_event
 from app.domain.accounts.entities import UserAccount
 from app.domain.github_integrations import change_analysis
 from app.infrastructure.github.client import GitHubApiError, GitHubClient, get_github_client
@@ -903,6 +904,7 @@ def generate_note_from_github_event(
     )
     db.add(note)
     db.flush()
+    record_note_event(db, note=note, actor_user_id=actor_user_id, action="note_create", source="github")
 
     document_payload = _build_document_payload(db, note, note.content or "")
     payload_json = json.dumps(document_payload, ensure_ascii=False)

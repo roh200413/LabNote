@@ -8,6 +8,7 @@ from datetime import timezone
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
+from app.domain.audit.note_log import record_note_event
 from app.core.config import get_settings
 from app.domain.accounts.use_cases import get_user_by_id
 from app.domain.note_formats.use_cases import get_company_note_format
@@ -264,6 +265,7 @@ def _save_result(db, user, project, payload, entry, generated, item):
     )
     db.add(note)
     db.flush()
+    record_note_event(db, note=note, actor_user_id=user.id, action="note_create", source="ai_batch")
     document = ResearchNoteDocumentORM(
         note_id=note.id,
         title=entry.title,

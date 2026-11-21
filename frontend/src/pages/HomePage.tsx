@@ -72,6 +72,7 @@ import { AiReviewBanner, type AiReviewState } from "../components/AiReviewBanner
 import { collectDroppedItems, hasFolders, itemsFromFileList, type UploadItem } from "../lib/folderUpload";
 import { CoverTemplateSettings } from "../components/CoverTemplateSettings";
 import { NoteActivityPanel } from "../components/NoteActivityPanel";
+import { NoteAuditLog } from "../components/NoteAuditLog";
 import { DataStorage } from "../components/DataStorage";
 import { ImageLab } from "../components/ImageLab";
 import { SidebarUploadButton } from "../components/SidebarUploadButton";
@@ -2590,6 +2591,9 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken, s
       )}
 
       {selectedProject && <NoteActivityPanel projectId={selectedProject.id} refreshKey={notes.length} />}
+      {selectedProject && canManageSelectedProject && (
+        <NoteAuditLog projectId={selectedProject.id} refreshKey={notes.length} />
+      )}
 
       {showProjectEditModal && (
         <div className="modal-backdrop" onClick={() => setShowProjectEditModal(false)}>
@@ -3234,6 +3238,8 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken, s
                     )}
                   </div>
                 </section>
+
+                <NoteAuditLog noteId={selectedNote.id} refreshKey={`${selectedNote.updated_at ?? ""}${approvalEvents.length}`} />
 
                 <DocumentEditor
                   noteId={selectedNote.id}

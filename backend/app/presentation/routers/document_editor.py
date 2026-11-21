@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.domain.audit.note_log import record_note_event
 from app.domain.research_notes.document_editor_use_cases import (
     ResearchNoteDocumentNotFoundError,
     get_note_document,
@@ -1453,6 +1454,9 @@ def export_note_document_pdf_endpoint(
     export.checksum = hashlib.sha256(pdf_bytes).hexdigest()
     export.status = "ready"
     export.completed_at = datetime.now(timezone.utc)
+    record_note_event(
+        db, note=note, actor_user_id=current_user.id, action="note_export", export_id=export.id, bytes=len(pdf_bytes)
+    )
     db.commit()
     filename = f"{note.title or document.title or 'research-note'}.pdf"
     # Headers must be latin-1: ASCII fallback plus RFC 5987 UTF-8 name for Korean titles.

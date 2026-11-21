@@ -10,6 +10,7 @@ from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.domain.audit.note_log import list_note_events, list_project_events, record_note_event
 from app.core.config import get_settings
 from app.domain.accounts.entities import UserAccount
 from app.infrastructure.db.models import (
@@ -242,6 +243,8 @@ def create_research_note(db: Session, current_user: UserAccount, **kwargs) -> Re
         bundle_id=bundle_id,
     )
     db.add(note)
+    db.flush()
+    record_note_event(db, note=note, actor_user_id=current_user.id, action="note_create")
     db.commit()
     db.refresh(note)
     return note
@@ -305,9 +308,14 @@ def update_research_note(db: Session, note_id: str, current_user: UserAccount, *
         _validate_member_for_project(db, member_id=kwargs["reviewer_member_id"], project=project)
 
     kwargs.pop("last_updated_by", None)
+    changes = {}
     for key, value in kwargs.items():
+        if getattr(note, key, None) != value:
+            changes[key] = {"from": getattr(note, key, None), "to": value}
         setattr(note, key, value)
     note.last_updated_by = current_user.id
+    if changes:
+        record_note_event(db, note=note, actor_user_id=current_user.id, action="note_update", changes=changes)
     db.commit()
     db.refresh(note)
     return note
@@ -330,6 +338,14 @@ def assign_research_note_members(
     if reviewer_member_id is not None:
         _validate_member_for_project(db, member_id=reviewer_member_id, project=project)
 
+    record_note_event(
+        db,
+        note=note,
+        actor_user_id=current_user.id,
+        action="note_assign",
+        author_member_id={"from": note.owner_member_id, "to": author_member_id},
+        reviewer_member_id={"from": note.reviewer_member_id, "to": reviewer_member_id},
+    )
     note.owner_member_id = author_member_id
     note.reviewer_member_id = reviewer_member_id
     note.last_updated_by = current_user.id
@@ -341,6 +357,7 @@ def assign_research_note_members(
 def delete_research_note(db: Session, note_id: str, current_user: UserAccount) -> None:
     note = _get_note(db, note_id)
     _require_note_access(db, note, current_user, manage=True)
+    record_note_event(db, note=note, actor_user_id=current_user.id, action="note_delete", status=note.status)
     storage = LocalStorageService()
     db.query(ResearchNoteApprovalEventORM).filter(ResearchNoteApprovalEventORM.note_id == note_id).delete()
     db.query(ResearchNoteSignatureSnapshotORM).filter(ResearchNoteSignatureSnapshotORM.note_id == note_id).delete()
@@ -541,6 +558,14 @@ def upload_note_file(
         note_file.page_count = len(pages)
         note_file.error_message = None
         note.last_updated_by = current_user.id
+        record_note_event(
+            db,
+            note=note,
+            actor_user_id=current_user.id,
+            action="note_file_upload",
+            file_name=original_name,
+            pages=len(pages),
+        )
         db.commit()
     except Exception as exc:
         note_file.status = "failed"
@@ -637,6 +662,14 @@ def replace_note_page_asset(
         change_reason=change_reason or "Replaced page image",
     )
     note.last_updated_by = current_user.id
+    record_note_event(
+        db,
+        note=note,
+        actor_user_id=current_user.id,
+        action="note_page_replace",
+        page_id=page.id,
+        file_name=original_name,
+    )
     db.commit()
     db.refresh(page)
     return page
@@ -781,6 +814,7 @@ def submit_research_note(
     note.status = "submitted"
     note.last_updated_by = current_user.id
     document.status = "submitted"
+    record_note_event(db, note=note, actor_user_id=current_user.id, action="note_submit", comment=comment)
     db.commit()
     db.refresh(event)
     return event
@@ -825,6 +859,7 @@ def approve_research_note(
     note.reviewed_date = note.reviewed_date or date.today()
     note.last_updated_by = current_user.id
     document.status = "approved"
+    record_note_event(db, note=note, actor_user_id=current_user.id, action="note_approve", comment=comment)
     db.commit()
     db.refresh(event)
     return event
@@ -862,6 +897,7 @@ def reject_research_note(
     note.status = "rejected"
     note.last_updated_by = current_user.id
     document.status = "rejected"
+    record_note_event(db, note=note, actor_user_id=current_user.id, action="note_reject", comment=comment)
     db.commit()
     db.refresh(event)
     return event
@@ -894,9 +930,24 @@ def reopen_research_note(
     note.status = "reopened"
     note.last_updated_by = current_user.id
     document.status = "reopened"
+    record_note_event(db, note=note, actor_user_id=current_user.id, action="note_reopen", comment=comment)
     db.commit()
     db.refresh(event)
     return event
+
+
+def list_note_audit_log(db: Session, note_id: str, current_user: UserAccount) -> list[dict]:
+    """Everything done to one note, newest first. Anyone who can see the note can read its trail."""
+    note = _get_note(db, note_id)
+    _require_note_access(db, note, current_user)
+    return list_note_events(db, note_id)
+
+
+def list_project_audit_log(db: Session, project_id: str, current_user: UserAccount) -> list[dict]:
+    """Note events of a whole project, deleted notes included. Managers only."""
+    project = _get_project(db, project_id)
+    _require_project_access(db, project, current_user, manage=True)
+    return list_project_events(db, project)
 
 
 def list_approval_events(
