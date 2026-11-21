@@ -76,6 +76,7 @@ import { NoteAuditLog } from "../components/NoteAuditLog";
 import { DataStorage } from "../components/DataStorage";
 import { ImageLab } from "../components/ImageLab";
 import { SidebarUploadButton } from "../components/SidebarUploadButton";
+import { NoteReviewPage } from "../components/NoteReviewPage";
 import { ALL_BUNDLES, NoteBundleBar, filterNotesByBundle, type BundleFilter } from "../components/NoteBundleBar";
 import { listNoteBundles, moveNotesToBundle, type NoteBundle } from "../api/noteBundle";
 import type { SearchNavigation } from "../api/search";
@@ -98,7 +99,7 @@ import type { DocumentSchema, ResearchNoteDocument, ResearchNoteDocumentSummary,
 import coverLayoutData from "../../../shared/cover_layout.json";
 
 type UserSection = "home" | "projects" | "researchers" | "format" | "github" | "platforms" | "profile";
-type ProjectWorkspaceView = "dashboard" | "members" | "notes" | "data" | "imaging" | "ai" | "github" | "cover";
+type ProjectWorkspaceView = "dashboard" | "members" | "notes" | "review" | "data" | "imaging" | "ai" | "github" | "cover";
 type SidebarIconName = UserSection | ProjectWorkspaceView;
 type CoverTemplate = {
   organization: string;
@@ -156,6 +157,10 @@ const sectionMeta: Array<{ id: UserSection; title: string; description: string }
 ];
 
 const projectViewMeta: Record<ProjectWorkspaceView, { title: string; description: string }> = {
+  review: {
+    title: "노트 검토",
+    description: "결재를 기다리는 노트, AI가 쓴 내용, 반려된 노트, 자동 점검에 걸린 노트를 한곳에서 확인합니다.",
+  },
   dashboard: {
     title: "프로젝트 대시보드",
     description: "개요, 기간, 책임자, 프로젝트 상태를 확인합니다.",
@@ -300,6 +305,13 @@ function SidebarIcon({ name }: { name: SidebarIconName }) {
           <ellipse cx="12" cy="5" rx="8" ry="3" />
           <path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5" />
           <path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6" />
+        </svg>
+      );
+    case "review":
+      return (
+        <svg {...commonProps}>
+          <path d="M9 11l3 3 8-8" />
+          <path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" />
         </svg>
       );
     case "imaging":
@@ -1030,6 +1042,10 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken, s
   const [openedResearchNoteId, setOpenedResearchNoteId] = useState<string | null>(null);
   const [pendingNoteFiles, setPendingNoteFiles] = useState<File[]>([]);
   const [bulkUploadFiles, setBulkUploadFiles] = useState<UploadItem[] | null>(null);
+  const [noteWorkspaceTab, setNoteWorkspaceTab] = useState<"editor" | "history">("editor");
+  useEffect(() => {
+    setNoteWorkspaceTab("editor");
+  }, [openedResearchNoteId]);
   // Files for the new-note page; null while the page is closed.
   const [noteCreateFiles, setNoteCreateFiles] = useState<File[] | null>(null);
   // All notes across the user's projects, for the home to-do lists.
@@ -3136,10 +3152,16 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken, s
         {openedResearchNoteId && selectedNote && (
           <div className="modal-backdrop" onClick={onBackToResearchNoteList}>
             <section className="card note-workspace-modal" onClick={(event) => event.stopPropagation()}>
-              <div className="section-head">
-                <div>
+              <div className="nw-head">
+                <div className="nw-title">
                   <p className="eyebrow">연구노트 작업 공간</p>
                   <h3>{selectedNote.title}</h3>
+                  <div className="nw-meta">
+                    <span className={`note-status-badge status-${selectedNote.status}`}>{selectedNoteStatusLabel}</span>
+                    <span>작성자 {getCompanyMemberName(selectedNote.owner_member_id) || "-"}</span>
+                    <span>검토자 {getCompanyMemberName(selectedNote.reviewer_member_id) || "미지정"}</span>
+                    <span>리비전 {activeNoteDocument?.current_revision_no ?? "-"}</span>
+                  </div>
                 </div>
                 <div className="note-file-actions">
                   <button type="button" className="secondary-button compact-button" onClick={onBackToResearchNoteList}>
@@ -3158,89 +3180,72 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken, s
                   canConfirm={canManageSelectedProject || selectedNoteIsAuthor}
                   onChange={setAiReview}
                 />
-                <section className="note-approval-panel">
-                  <div className="note-approval-summary">
-                    <div>
-                      <p className="eyebrow">결재 진행</p>
-                      <h4>
-                        <span className={`note-status-badge status-${selectedNote.status}`}>
-                          {selectedNoteStatusLabel}
-                        </span>
-                      </h4>
-                    </div>
-                    <div className="note-approval-meta">
-                      <span>작성자: {getCompanyMemberName(selectedNote.owner_member_id)}</span>
-                      <span>검토자: {getCompanyMemberName(selectedNote.reviewer_member_id)}</span>
-                      <span>리비전: {activeNoteDocument?.current_revision_no ?? "-"}</span>
-                    </div>
-                  </div>
-
-                  <div className="note-approval-actions">
-                    <label className="note-approval-comment">
-                      의견
-                      <textarea
-                        value={approvalComment}
-                        onChange={(event) => setApprovalComment(event.target.value)}
-                        rows={3}
-                        placeholder="제출·승인 시 선택, 반려·재개 시 필수입니다."
-                      />
-                    </label>
-                    <div className="note-approval-button-row">
-                      <button
-                        type="button"
-                        className="secondary-button compact-button"
-                        onClick={() => void runSelectedNoteApprovalAction("submit")}
-                        disabled={!canSubmitSelectedNote}
-                        title={aiReview?.required && !aiReview.reviewed ? "AI 작성 내용을 검토 완료해야 제출할 수 있습니다" : undefined}
-                      >
-                        제출
-                      </button>
-                      <button
-                        type="button"
-                        className="compact-button"
-                        onClick={() => void runSelectedNoteApprovalAction("approve")}
-                        disabled={!canReviewSelectedNote}
-                      >
-                        승인
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary-button compact-button"
-                        onClick={() => void runSelectedNoteApprovalAction("reject")}
-                        disabled={!canReviewSelectedNote}
-                      >
-                        반려
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary-button compact-button"
-                        onClick={() => void runSelectedNoteApprovalAction("reopen")}
-                        disabled={!canReopenSelectedNote}
-                      >
-                        재개
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="note-approval-events">
-                    {approvalEvents.length === 0 ? (
-                      <span>아직 결재 이력이 없습니다.</span>
-                    ) : (
-                      approvalEvents.map((event) => (
-                        <div key={event.id} className="note-approval-event">
-                          <strong>{approvalEventLabels[event.event_type] ?? event.event_type}</strong>
-                          <span>
-                            {getCompanyMemberName(event.actor_member_id)} / {new Date(event.created_at).toLocaleString()}
-                          </span>
-                          {event.comment && <p>{event.comment}</p>}
-                        </div>
-                      ))
-                    )}
+                <section className="nw-approval" aria-label="결재">
+                  <input
+                    className="nw-comment"
+                    value={approvalComment}
+                    onChange={(event) => setApprovalComment(event.target.value)}
+                    placeholder="의견 (반려·재개할 때는 꼭 적어 주세요)"
+                    maxLength={500}
+                  />
+                  <div className="nw-buttons">
+                    <button
+                      type="button"
+                      className="secondary-button compact-button"
+                      onClick={() => void runSelectedNoteApprovalAction("submit")}
+                      disabled={!canSubmitSelectedNote}
+                      title={aiReview?.required && !aiReview.reviewed ? "AI 작성 내용을 검토 완료해야 제출할 수 있습니다" : undefined}
+                    >
+                      제출
+                    </button>
+                    <button type="button" className="compact-button" onClick={() => void runSelectedNoteApprovalAction("approve")} disabled={!canReviewSelectedNote}>
+                      승인
+                    </button>
+                    <button type="button" className="secondary-button compact-button danger-text" onClick={() => void runSelectedNoteApprovalAction("reject")} disabled={!canReviewSelectedNote}>
+                      반려
+                    </button>
+                    <button type="button" className="secondary-button compact-button" onClick={() => void runSelectedNoteApprovalAction("reopen")} disabled={!canReopenSelectedNote}>
+                      재개
+                    </button>
                   </div>
                 </section>
 
-                <NoteAuditLog noteId={selectedNote.id} refreshKey={`${selectedNote.updated_at ?? ""}${approvalEvents.length}`} />
+                <div className="nw-tabs" role="tablist">
+                  <button type="button" role="tab" aria-selected={noteWorkspaceTab === "editor"} className={noteWorkspaceTab === "editor" ? "active" : ""} onClick={() => setNoteWorkspaceTab("editor")}>
+                    문서 편집기
+                  </button>
+                  <button type="button" role="tab" aria-selected={noteWorkspaceTab === "history"} className={noteWorkspaceTab === "history" ? "active" : ""} onClick={() => setNoteWorkspaceTab("history")}>
+                    결재·변경 이력
+                    {approvalEvents.length > 0 && <span className="nw-count">{approvalEvents.length}</span>}
+                  </button>
+                </div>
 
+                {noteWorkspaceTab === "history" && (
+                  <div className="nw-history">
+                    <section className="nw-events">
+                      <h4>결재 이력</h4>
+                      {approvalEvents.length === 0 ? (
+                        <p className="nw-empty">아직 결재 이력이 없습니다.</p>
+                      ) : (
+                        <ol>
+                          {approvalEvents.map((event) => (
+                            <li key={event.id}>
+                              <strong>{approvalEventLabels[event.event_type] ?? event.event_type}</strong>
+                              <span>
+                                {getCompanyMemberName(event.actor_member_id)} · {new Date(event.created_at).toLocaleString()}
+                              </span>
+                              {event.comment && <p>{event.comment}</p>}
+                            </li>
+                          ))}
+                        </ol>
+                      )}
+                    </section>
+                    <NoteAuditLog noteId={selectedNote.id} refreshKey={`${selectedNote.updated_at ?? ""}${approvalEvents.length}`} />
+                  </div>
+                )}
+
+                {/* Stays mounted (only hidden) so unsaved edits survive a visit to the history tab. */}
+                <div hidden={noteWorkspaceTab !== "editor"}>
                 <DocumentEditor
                   noteId={selectedNote.id}
                   document={activeNoteDocument?.document ?? null}
@@ -3257,6 +3262,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken, s
                   isLocked={selectedNoteIsLocked}
                   lockMessage={`${selectedNoteStatusLabel} 상태의 연구노트는 편집할 수 없습니다.`}
                 />
+                </div>
               </div>
             </section>
           </div>
@@ -3775,6 +3781,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken, s
               ["dashboard", "프로젝트 대시보드"],
               ["members", "연구원 관리"],
               ["notes", "연구노트"],
+              ["review", "노트 검토"],
               ["data", "데이터 보관함"],
               ["imaging", "이미지 처리"],
               ["ai", "AI 생성"],
@@ -3785,7 +3792,7 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken, s
             <button
               key={view}
               type="button"
-              className={`user-nav-item${projectView === view ? " active" : ""}`}
+              className={`user-nav-item${projectView === view ? " active" : ""}${view === "review" ? " user-nav-sub" : ""}`}
               onClick={() => setProjectView(view)}
               title={sidebarCollapsed ? label : undefined}
             >
@@ -3856,6 +3863,17 @@ export function HomePage({ currentUser, onCurrentUserChange, openProfileToken, s
                     setAiSeedDocuments({ files, token: Date.now() });
                     setProjectView("ai");
                   }}
+                />
+              )}
+              {projectView === "review" && selectedProject && (
+                <NoteReviewPage
+                  key={selectedProject.id}
+                  projectId={selectedProject.id}
+                  onOpenNote={(noteId) => {
+                    setProjectView("notes");
+                    void onOpenResearchNote(noteId);
+                  }}
+                  onChanged={() => void refreshNotes(selectedProject.id)}
                 />
               )}
               {projectView === "imaging" && <ImageLab />}

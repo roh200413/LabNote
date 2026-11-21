@@ -6,10 +6,11 @@
  *   /projects/{id}                     project dashboard
  *   /projects/{id}/{view}              members, notes, data, imaging, ai, github, cover
  *   /projects/{id}/notes/{noteId}      an open research note
+ *   /projects/{id}/notes/review        note review queue (a sub-page of 연구노트)
  */
 
 export const USER_SECTIONS = ["home", "projects", "researchers", "format", "github", "platforms", "profile"] as const;
-export const PROJECT_VIEWS = ["dashboard", "members", "notes", "data", "imaging", "ai", "github", "cover"] as const;
+export const PROJECT_VIEWS = ["dashboard", "members", "notes", "review", "data", "imaging", "ai", "github", "cover"] as const;
 
 export type RouteSection = (typeof USER_SECTIONS)[number];
 export type RouteProjectView = (typeof PROJECT_VIEWS)[number];
@@ -24,6 +25,7 @@ const isView = (value: string): value is RouteProjectView => (PROJECT_VIEWS as r
 export function parseRoute(pathname: string, search: string): AppRoute {
   const parts = pathname.split("/").filter(Boolean).map(decodeURIComponent);
   if (parts[0] === "projects" && parts[1]) {
+    if (parts[2] === "notes" && parts[3] === "review") return { kind: "project", projectId: parts[1], view: "review" };
     const view = parts[2] && isView(parts[2]) ? parts[2] : "dashboard";
     const noteId = view === "notes" && parts[3] ? parts[3] : undefined;
     return { kind: "project", projectId: parts[1], view, noteId };
@@ -36,6 +38,7 @@ export function parseRoute(pathname: string, search: string): AppRoute {
 export function buildPath(route: AppRoute): string {
   if (route.kind === "project") {
     const base = `/projects/${encodeURIComponent(route.projectId)}`;
+    if (route.view === "review") return `${base}/notes/review`;
     if (route.view === "notes" && route.noteId) return `${base}/notes/${encodeURIComponent(route.noteId)}`;
     return route.view === "dashboard" ? base : `${base}/${route.view}`;
   }

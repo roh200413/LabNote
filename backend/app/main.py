@@ -32,6 +32,7 @@ from app.presentation.routers.project_data import router as project_data_router
 from app.presentation.routers.project import router as project_router
 from app.presentation.routers.note_bundle import router as note_bundle_router
 from app.presentation.routers.research_note import router as research_note_router
+from app.presentation.routers.research_note_ai_review import project_router as note_review_router
 from app.presentation.routers.research_note_ai_review import router as research_note_ai_review_router
 from app.presentation.routers.research_note_pdf_split import router as research_note_pdf_split_router
 
@@ -105,6 +106,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(project_router)
     app.include_router(research_note_pdf_split_router)
     app.include_router(research_note_ai_review_router)
+    app.include_router(note_review_router)
     app.include_router(note_bundle_router)
     app.include_router(research_note_router)
     app.include_router(file_router)

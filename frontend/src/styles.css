@@ -9886,3 +9886,465 @@ h1, h2, h3, h4 { margin: 0; line-height: 1.25; }
 @media (max-width: 720px) {
   .note-audit-list li { grid-template-columns: 1fr; gap: 2px; }
 }
+
+/* ─── Note workspace polish (header, approval panel, change history, editor chrome) ─── */
+.note-workspace-modal > .section-head { align-items: flex-start; gap: 16px; }
+.note-workspace-modal > .section-head h3 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.note-workspace-modal > .section-head .note-file-actions { flex: none; display: flex; gap: 8px; }
+.note-workspace-modal .note-main-stack { gap: 16px; }
+
+/* Approval panel: status + people on the left, comment and actions on the right, history underneath. */
+.note-workspace-modal .note-approval-panel {
+  grid-template-columns: minmax(200px, 0.32fr) minmax(0, 0.68fr);
+  gap: 16px 24px;
+  padding: 18px 20px;
+}
+.note-workspace-modal .note-approval-summary .eyebrow {
+  margin-bottom: 8px;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+.note-workspace-modal .note-approval-summary .note-status-badge {
+  padding: 5px 14px;
+  font-size: 14px;
+}
+.note-workspace-modal .note-approval-meta { flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 14px; }
+.note-workspace-modal .note-approval-meta span {
+  padding: 3px 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.note-workspace-modal .note-approval-comment { font-size: 13px; color: var(--text-secondary); }
+.note-workspace-modal .note-approval-comment textarea { min-height: 64px; font-weight: 400; font-size: 14px; }
+.note-workspace-modal .note-approval-button-row { margin-top: 10px; justify-content: flex-end; }
+.note-workspace-modal .note-approval-button-row button { width: auto; min-width: 72px; min-height: 36px; }
+.note-workspace-modal .note-approval-events {
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.note-workspace-modal .note-approval-events > span { font-size: 13px; }
+
+/* Change history: same frame as the approval panel, a compact one-line header with a chevron. */
+.note-workspace-modal .note-audit-log {
+  padding: 0;
+  border-radius: var(--radius);
+}
+.note-workspace-modal .note-audit-log > summary {
+  position: relative;
+  padding: 14px 44px 14px 20px;
+  list-style: none;
+  gap: 4px 12px;
+}
+.note-workspace-modal .note-audit-log > summary::-webkit-details-marker { display: none; }
+.note-workspace-modal .note-audit-log > summary::after {
+  content: "";
+  position: absolute;
+  right: 20px;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  margin-top: -6px;
+  border-right: 2px solid var(--text-muted);
+  border-bottom: 2px solid var(--text-muted);
+  transform: rotate(45deg);
+  transition: transform 0.15s ease;
+}
+.note-workspace-modal .note-audit-log[open] > summary::after { margin-top: -2px; transform: rotate(-135deg); }
+.note-workspace-modal .note-audit-log[open] > summary { border-bottom: 1px solid var(--border); }
+.note-workspace-modal .note-audit-log > :not(summary) { margin-left: 20px; margin-right: 20px; }
+.note-workspace-modal .note-audit-log > p { margin-top: 12px; margin-bottom: 14px; }
+.note-workspace-modal .note-audit-list { margin-top: 4px; margin-bottom: 8px; }
+.note-workspace-modal .note-audit-list li:first-child { border-top: 0; }
+
+/* The editor sits in the stack like the panels above it: no card-in-card borders or shadows. */
+.note-workspace-modal .editor-toolbar.card {
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  box-shadow: none;
+}
+.note-workspace-modal .editor-toolbar-main { flex-wrap: wrap; align-items: center; }
+.note-workspace-modal .editor-toolbar-main > div:first-child { min-width: 0; }
+.note-workspace-modal .editor-toolbar-actions { justify-content: flex-end; }
+.note-workspace-modal .editor-toolbar-actions select { max-width: min(320px, 100%); text-overflow: ellipsis; }
+.note-workspace-modal .editor-toolbar-actions button { width: auto; min-height: 36px; }
+
+@media (max-width: 720px) {
+  .note-workspace-modal > .section-head { padding: 14px 16px; flex-wrap: wrap; }
+  .note-workspace-modal > .section-head h3 { font-size: 16px; }
+  .note-workspace-modal .note-main-stack { padding: 14px; gap: 12px; }
+  .note-workspace-modal .note-approval-panel { grid-template-columns: 1fr; padding: 16px; }
+  .note-workspace-modal .note-approval-meta { flex-direction: row; flex-wrap: wrap; }
+  .note-workspace-modal .note-approval-button-row { justify-content: stretch; }
+  .note-workspace-modal .note-approval-button-row button { flex: 1 1 calc(50% - 8px); }
+  .note-workspace-modal .note-audit-log > summary { padding: 12px 40px 12px 16px; }
+  .note-workspace-modal .note-audit-log > :not(summary) { margin-left: 16px; margin-right: 16px; }
+}
+@media (max-width: 720px) {
+  .note-workspace-modal .editor-toolbar-main { flex-direction: column; align-items: stretch; gap: 10px; }
+  .note-workspace-modal .editor-toolbar-actions { width: 100%; min-width: 0; justify-content: flex-start; }
+  .note-workspace-modal .editor-toolbar-actions select { flex: 1 1 100%; width: 100%; min-width: 0; max-width: 100%; }
+}
+@media (max-width: 720px) {
+  .note-workspace-modal > .section-head > div:first-child { flex: 1 1 100%; min-width: 0; }
+  .note-workspace-modal > .section-head .note-file-actions { width: 100%; }
+  .note-workspace-modal > .section-head .note-file-actions button { flex: 1 1 0; width: auto; }
+}
+@media (max-width: 720px) {
+  .note-workspace-modal > .section-head .note-file-actions { flex-wrap: nowrap; }
+  .note-workspace-modal > .section-head .note-file-actions button { min-width: 0; }
+}
+@media (max-width: 720px) {
+  .note-workspace-modal > .section-head .note-file-actions { flex-direction: row; }
+}
+
+/* ─── Note workspace: header, one-row approval bar, editor/history tabs ── */
+.nw-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.nw-title h3 {
+  margin: 2px 0 8px;
+  font-size: 20px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.nw-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px 14px;
+  flex-wrap: wrap;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.nw-meta > span + span::before {
+  content: "·";
+  margin-right: 14px;
+  color: #cbd5e1;
+}
+
+.nw-approval {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid #e5eaf1;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.nw-comment {
+  flex: 1 1 260px;
+  min-width: 0;
+  min-height: 38px;
+  padding: 6px 12px;
+  font-size: 14px;
+}
+
+.nw-buttons {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.nw-buttons button {
+  width: auto;
+  min-width: 56px;
+}
+
+.nw-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid #e5eaf1;
+}
+
+.nw-tabs button {
+  width: auto;
+  min-height: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: #64748b;
+  font-size: 14px;
+  font-weight: 700;
+  box-shadow: none;
+}
+
+.nw-tabs button:hover {
+  color: #172033;
+  background: transparent;
+}
+
+.nw-tabs button.active {
+  border-bottom-color: #2563eb;
+  color: #1d4ed8;
+}
+
+.nw-count {
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #475569;
+  font-size: 11px;
+  text-align: center;
+}
+
+.nw-history {
+  display: grid;
+  gap: 14px;
+}
+
+.nw-events {
+  padding: 14px 16px;
+  border: 1px solid #e5eaf1;
+  border-radius: 10px;
+}
+
+.nw-events h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.nw-events ol {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nw-events li {
+  display: grid;
+  gap: 2px;
+  padding-left: 12px;
+  border-left: 3px solid #bfdbfe;
+  font-size: 13px;
+}
+
+.nw-events li span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.nw-events li p {
+  margin: 2px 0 0;
+  color: #334155;
+}
+
+.nw-empty {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+/* ─── Sidebar sub-item (노트 검토 sits under 연구노트) ──────────────────── */
+.user-nav-item.user-nav-sub {
+  min-height: 38px;
+  margin-left: 18px;
+  width: calc(100% - 18px);
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.user-nav-item.user-nav-sub strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.sidebar-collapsed .user-nav-item.user-nav-sub {
+  margin-left: 0;
+  width: 100%;
+}
+
+/* ─── 노트 검토 page ───────────────────────────────────────────────────── */
+.nr {
+  display: grid;
+  gap: 12px;
+}
+
+.nr-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.nr-tab {
+  width: auto;
+  min-height: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border: 1px solid #dfe5ee;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: none;
+}
+
+.nr-tab strong {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 12px;
+  text-align: center;
+}
+
+.nr-tab.has strong {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.nr-tab.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.nr-hint {
+  margin: 0;
+}
+
+.nr-empty {
+  display: grid;
+  gap: 4px;
+  padding: 36px 16px;
+  border: 1px dashed #dfe5ee;
+  border-radius: 10px;
+  color: #94a3b8;
+  text-align: center;
+}
+
+.nr-empty strong {
+  color: #475569;
+}
+
+.nr-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nr-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 14px 16px;
+  border: 1px solid #e5eaf1;
+  border-left: 4px solid #cbd5e1;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.nr-item.warn {
+  border-left-color: #f59e0b;
+}
+
+.nr-item.danger {
+  border-left-color: #ef4444;
+}
+
+.nr-main {
+  display: grid;
+  gap: 6px;
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.nr-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.nr-title-row > strong {
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.nr-ai {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #f5f3ff;
+  color: #6d28d9;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.nr-meta {
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.nr-tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.nr-tags:empty {
+  display: none;
+}
+
+.nr-tag {
+  padding: 1px 8px;
+  border-radius: 4px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.nr-tag.awaiting_approval { background: #fef3c7; color: #92400e; }
+.nr-tag.rejected { background: #fee2e2; color: #b91c1c; }
+.nr-tag.ai_unreviewed { background: #f5f3ff; color: #6d28d9; }
+
+.nr-checks {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding-left: 16px;
+  color: #b45309;
+  font-size: 12px;
+}
+
+.nr-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.nr-actions button {
+  width: auto;
+}
