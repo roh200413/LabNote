@@ -12,3 +12,6 @@ output/playwright/
 backend/storage/
 *.db
 *.sqlite3
+
+# AutoFlowPlus preview state written at runtime
+.labnote/

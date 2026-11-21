@@ -9844,3 +9844,29 @@ h1, h2, h3, h4 { margin: 0; line-height: 1.25; }
     grid-row: 1;
   }
 }
+
+/* Activity table: tighter cells so it fits next to the sidebar without scrolling sideways. */
+.note-activity-table th,
+.note-activity-table td {
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.note-activity-table th:nth-child(2),
+.note-activity-table th:nth-child(3),
+.note-activity-table td:nth-child(2),
+.note-activity-table td:nth-child(3),
+.note-activity-table td:nth-child(5) {
+  white-space: nowrap;
+}
+
+/* Note format / cover editors: the page preview has a fixed size, so on narrow screens it scrolls inside its card
+   instead of widening the whole page. */
+.fmt-workspace > * {
+  min-width: 0;
+}
+
+.fmt-stage {
+  overflow-x: auto;
+  justify-content: safe center;
+}

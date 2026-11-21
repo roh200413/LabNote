@@ -8,18 +8,41 @@ from datetime import datetime, timedelta, timezone
 from app.core.config import get_settings
 
 
+HASH_PREFIX = "pbkdf2_sha256"
+LEGACY_ITERATIONS = 100_000  # hashes created before the iteration count was stored in the hash
+
+
+def _derive(password: str, salt: bytes, iterations: int) -> bytes:
+    return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+
+
 def hash_password(password: str) -> str:
+    iterations = get_settings().password_hash_iterations
     salt = secrets.token_bytes(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 100000)
-    return f"{base64.b64encode(salt).decode()}${base64.b64encode(digest).decode()}"
+    digest = _derive(password, salt, iterations)
+    return f"{HASH_PREFIX}${iterations}${base64.b64encode(salt).decode()}${base64.b64encode(digest).decode()}"
+
+
+def _parse_hash(encoded_hash: str) -> tuple[int, bytes, bytes]:
+    parts = encoded_hash.split("$")
+    if parts[0] == HASH_PREFIX and len(parts) == 4:
+        return int(parts[1]), base64.b64decode(parts[2]), base64.b64decode(parts[3])
+    salt_b64, digest_b64 = encoded_hash.split("$", maxsplit=1)  # legacy "salt$digest"
+    return LEGACY_ITERATIONS, base64.b64decode(salt_b64), base64.b64decode(digest_b64)
 
 
 def verify_password(password: str, encoded_hash: str) -> bool:
-    salt_b64, digest_b64 = encoded_hash.split("$", maxsplit=1)
-    salt = base64.b64decode(salt_b64.encode())
-    expected = base64.b64decode(digest_b64.encode())
-    actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 100000)
-    return hmac.compare_digest(actual, expected)
+    iterations, salt, expected = _parse_hash(encoded_hash)
+    return hmac.compare_digest(_derive(password, salt, iterations), expected)
+
+
+def password_needs_rehash(encoded_hash: str) -> bool:
+    """True for old-format hashes or ones made with fewer iterations than the current setting."""
+    try:
+        iterations, _, _ = _parse_hash(encoded_hash)
+    except (ValueError, IndexError):
+        return False
+    return not encoded_hash.startswith(f"{HASH_PREFIX}$") or iterations < get_settings().password_hash_iterations
 
 
 def _b64url_encode(value: bytes) -> str:

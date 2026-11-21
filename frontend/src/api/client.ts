@@ -1,7 +1,13 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api";
 const BACKEND_ORIGIN = import.meta.env.VITE_BACKEND_ORIGIN ?? "http://127.0.0.1:8110";
 const AUTH_TOKEN_KEY = "labnote.access_token";
-const API_TIMEOUT_MS = 5000;
+// Ordinary requests fail fast; uploads (PDF rendering, large images) get much longer so a slow
+// but successful upload is not reported as a failure (and then retried into a duplicate).
+const API_TIMEOUT_MS = 15000;
+const UPLOAD_TIMEOUT_MS = 180000;
+/** Fired when the server rejects the saved login (expired or revoked); the app returns to the login screen. */
+export const UNAUTHORIZED_EVENT = "labnote:unauthorized";
+const PUBLIC_AUTH_PATHS = ["/auth/login", "/auth/signup"];
 
 export function getAccessToken(): string | null {
   return window.localStorage.getItem(AUTH_TOKEN_KEY);
@@ -19,7 +25,7 @@ export async function apiFetch(
   path: string,
   init: RequestInit & { timeoutMs?: number } = {}
 ): Promise<Response> {
-  const { timeoutMs = API_TIMEOUT_MS, ...requestInit } = init;
+  const { timeoutMs = init.body instanceof FormData ? UPLOAD_TIMEOUT_MS : API_TIMEOUT_MS, ...requestInit } = init;
   const headers = new Headers(requestInit.headers);
   const token = getAccessToken();
   if (token) {
@@ -30,7 +36,12 @@ export async function apiFetch(
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    return await fetch(`${API_BASE_URL}${path}`, { ...requestInit, headers, signal: controller.signal });
+    const response = await fetch(`${API_BASE_URL}${path}`, { ...requestInit, headers, signal: controller.signal });
+    if (response.status === 401 && token && !PUBLIC_AUTH_PATHS.some((prefix) => path.startsWith(prefix))) {
+      setAccessToken(null);
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    }
+    return response;
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
       throw new Error("서버 응답 시간이 초과되었습니다. API 서버가 실행 중인지 확인하세요.");

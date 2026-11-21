@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 
 import { getMe, login, signUp, type AuthUser } from "./api/auth";
-import { setAccessToken } from "./api/client";
+import { UNAUTHORIZED_EVENT, setAccessToken } from "./api/client";
 import type { SearchNavigation } from "./api/search";
 import { FeedbackButton } from "./components/FeedbackButton";
 import { GlobalSearch } from "./components/GlobalSearch";
@@ -79,6 +79,17 @@ export default function App() {
       setError((err as Error).message);
     }
   };
+
+  // A saved login that the server no longer accepts (expired after a day, or the account was disabled).
+  useEffect(() => {
+    const onUnauthorized = () => {
+      setCurrentUser(null);
+      setPassword("");
+      setNotice("로그인 시간이 지났습니다. 다시 로그인해 주세요.");
+    };
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+  }, []);
 
   const onLogout = () => {
     setAccessToken(null);

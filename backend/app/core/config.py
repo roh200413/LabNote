@@ -16,8 +16,17 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8000
     app_secret_key: str = "change-me-in-production"
+    # Comma separated browser origins allowed to call the API (the frontend's address).
+    cors_origins: str = (
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,"
+        "http://localhost:5175,http://127.0.0.1:5175"
+    )
+    # When set, AutoFlowPlus must send it as the X-AutoFlow-Key header.
+    autoflow_api_key: str = ""
     access_token_expire_minutes: int = 60 * 24
     system_admin_password: str = "admin1234"
+    # PBKDF2 rounds for new password hashes; existing hashes are upgraded the next time that user logs in.
+    password_hash_iterations: int = 600_000
 
     db: str = "postgresql"
     db_user: str = ""
@@ -72,6 +81,10 @@ class Settings(BaseSettings):
     postgres_db: str = Field(default="labnote", alias="POSTGRES_DB")
     postgres_host: str = Field(default="localhost", alias="POSTGRES_HOST")
     postgres_port: int = Field(default=5432, alias="POSTGRES_PORT")
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [item.strip() for item in self.cors_origins.split(",") if item.strip()]
 
     @computed_field  # type: ignore[prop-decorator]
     @property

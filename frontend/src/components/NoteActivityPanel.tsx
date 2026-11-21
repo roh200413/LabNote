@@ -151,7 +151,7 @@ export function NoteActivityPanel({ projectId, refreshKey = 0 }: Props) {
                 <th>이번 달</th>
                 <th>전체</th>
                 <th>마지막 작성</th>
-                <th>초안·반려·결재대기</th>
+                <th title="초안 · 반려 · 결재 대기 건수">초안·반려·대기</th>
                 <th>확인할 점</th>
               </tr>
             </thead>

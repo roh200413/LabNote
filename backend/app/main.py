@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -36,20 +36,34 @@ from app.presentation.routers.research_note_ai_review import router as research_
 from app.presentation.routers.research_note_pdf_split import router as research_note_pdf_split_router
 
 
+# Folders under the storage root that must only be served through authenticated endpoints.
+PRIVATE_STORAGE_PREFIXES = ("project-data/",)
+
+
+class PublicStaticFiles(StaticFiles):
+    """Serves uploaded page images and signatures by their unguessable names, but never private data."""
+
+    async def get_response(self, path, scope):
+        if any(path.replace("\\", "/").lstrip("/").startswith(prefix) for prefix in PRIVATE_STORAGE_PREFIXES):
+            raise HTTPException(status_code=404)
+        return await super().get_response(path, scope)
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     app_settings = settings or get_settings()
+    if app_settings.app_env.lower() not in {"local", "dev", "development", "test"}:
+        weak = []
+        if app_settings.app_secret_key == "change-me-in-production":
+            weak.append("APP_SECRET_KEY")
+        if app_settings.system_admin_password == "admin1234":
+            weak.append("SYSTEM_ADMIN_PASSWORD")
+        if weak:
+            raise RuntimeError(f"운영 환경에서는 {', '.join(weak)} 기본값을 바꿔야 합니다 (.env 확인)")
     app_settings.storage_root_path.mkdir(parents=True, exist_ok=True)
     app = FastAPI(title=app_settings.app_name, debug=app_settings.app_debug)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "http://localhost:5173",
-            "http://127.0.0.1:5173",
-            "http://localhost:5174",
-            "http://127.0.0.1:5174",
-            "http://localhost:5175",
-            "http://127.0.0.1:5175",
-        ],
+        allow_origins=app_settings.cors_origin_list,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -94,7 +108,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(note_bundle_router)
     app.include_router(research_note_router)
     app.include_router(file_router)
-    app.mount("/storage", StaticFiles(directory=app_settings.storage_root_path), name="storage")
+    app.mount("/storage", PublicStaticFiles(directory=app_settings.storage_root_path), name="storage")
 
     @app.get("/")
     def root() -> dict[str, str]:

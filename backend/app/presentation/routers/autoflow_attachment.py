@@ -7,9 +7,11 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
+
+from app.core.config import get_settings
 
 
 router = APIRouter(prefix="/api/autoflow", tags=["autoflow-attachment"])
@@ -21,17 +23,17 @@ SLUG_RE = re.compile(r"[^a-z0-9]+")
 class AutoFlowSourceDocument(BaseModel):
     id: int | None = None
     title: str | None = None
-    relative_path: str
-    content: str | None = None
+    relative_path: str = Field(max_length=500)
+    content: str | None = Field(default=None, max_length=200_000)
 
 
 class AutoFlowExecutionRequest(BaseModel):
-    projectSlug: str
-    projectName: str | None = None
-    taskType: str | None = None
-    artifactType: str | None = None
-    artifactTitle: str | None = None
-    sourceDocuments: list[AutoFlowSourceDocument] = Field(default_factory=list)
+    projectSlug: str = Field(max_length=120)
+    projectName: str | None = Field(default=None, max_length=255)
+    taskType: str | None = Field(default=None, max_length=80)
+    artifactType: str | None = Field(default=None, max_length=80)
+    artifactTitle: str | None = Field(default=None, max_length=255)
+    sourceDocuments: list[AutoFlowSourceDocument] = Field(default_factory=list, max_length=200)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -70,7 +72,14 @@ def _excerpt(text: str | None, *, limit: int = 220) -> str | None:
 
 
 @router.post("/executions")
-def create_autoflow_execution(payload: AutoFlowExecutionRequest, request: Request) -> dict[str, Any]:
+def create_autoflow_execution(
+    payload: AutoFlowExecutionRequest,
+    request: Request,
+    x_autoflow_key: str | None = Header(default=None),
+) -> dict[str, Any]:
+    expected = get_settings().autoflow_api_key
+    if expected and x_autoflow_key != expected:
+        raise HTTPException(status_code=401, detail="AutoFlow 키가 올바르지 않습니다")
     project_slug = _normalize_slug(payload.projectSlug)
     preview_url = str(request.url_for("get_autoflow_workspace_preview", project_slug=project_slug))
     source_documents = [

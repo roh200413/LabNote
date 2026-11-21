@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.security import create_access_token, hash_password, verify_password
+from app.core.security import create_access_token, hash_password, password_needs_rehash, verify_password
 from app.core.system_admin_registry import SystemAdmin
 from app.domain.accounts.entities import UserAccount
 from app.domain.audit.entities import AuditLogEntry
@@ -264,6 +264,9 @@ def login_user(db: Session, email: str, password: str) -> tuple[UserAccount, str
         raise PendingApprovalError()
     if not user.is_active:
         raise InvalidCredentialsError()
+    if password_needs_rehash(user.password):
+        user.password = hash_password(password)
+        users.update(user)
 
     _record_audit(
         audits,
